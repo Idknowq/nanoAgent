@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nano-agent"
+version = "0.1.0"
+description = "A lightweight AI Agent prototype for GitHub repository diagnosis and repair."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "nanoAgent" }
+]
+dependencies = [
+  "gitpython>=3.1.43",
+  "openai>=1.40.0",
+  "pydantic>=2.8.0",
+  "python-dotenv>=1.0.1",
+  "rich>=13.7.1",
+  "typer>=0.12.3",
+]
+
+[project.scripts]
+nano-agent = "nano_agent.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["nano_agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
