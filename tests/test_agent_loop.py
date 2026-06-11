@@ -10,7 +10,7 @@ from nano_agent.models import AgentMessage, LLMResponse, RunSummary, ToolUseRequ
 from nano_agent.permissions.errors import PermissionDeniedError
 from nano_agent.services.llm import LLMClient
 from nano_agent.tools.base import ToolContext, ToolRegistry, build_default_tool_registry
-from nano_agent.tools.bash import BashTool
+from nano_agent.tools.run_command import RunCommandTool
 from nano_agent.tools.todo import TodoWriteTool
 
 
@@ -24,13 +24,13 @@ class OneToolUseLLM:
         self.calls += 1
         if self.calls == 1:
             return LLMResponse(
-                content="call bash",
+                content="call run_command",
                 stop_reason="tool_use",
                 tool_uses=[
                     ToolUseRequest(
                         id="toolu_1",
-                        name="bash",
-                        input={"command": "printf hello"},
+                        name="run_command",
+                        input={"program": "python3", "args": ["-c", "print('hello', end='')"]},
                     )
                 ],
             )
@@ -83,14 +83,14 @@ def test_agent_loop_executes_tool_and_records_result(tmp_path: Path) -> None:
         workspace_path=tmp_path,
         config=config,
     )
-    tools = ToolRegistry([BashTool(config=config, cwd=tmp_path)])
+    tools = ToolRegistry([RunCommandTool()])
     loop = AgentLoop(config=config, llm=llm, tools=tools, context=context)
     run = RunSummary(run_id="test", repo_url="https://example.com/repo.git")
 
     result = loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
 
     assert result.status == "succeeded"
-    assert result.tool_calls[0].tool_name == "bash"
+    assert result.tool_calls[0].tool_name == "run_command"
     assert result.tool_calls[0].success
     assert any(message.role == "tool" for message in result.messages)
 
@@ -104,7 +104,7 @@ def test_agent_loop_calls_hooks(tmp_path: Path) -> None:
         workspace_path=tmp_path,
         config=config,
     )
-    tools = ToolRegistry([BashTool(config=config, cwd=tmp_path)])
+    tools = ToolRegistry([RunCommandTool()])
     hook = RecordingHook()
     loop = AgentLoop(config=config, llm=llm, tools=tools, context=context, hooks=[hook])
     run = RunSummary(run_id="test", repo_url="https://example.com/repo.git")
@@ -135,7 +135,7 @@ def test_default_tool_registry_exposes_metadata(tmp_path: Path) -> None:
     assert all(spec.name != "bash" for spec in specs)
 
 
-def test_permission_hook_rejects_unapproved_bash(tmp_path: Path) -> None:
+def test_permission_hook_rejects_unapproved_command(tmp_path: Path) -> None:
     llm: LLMClient = OneToolUseLLM()
     config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5)
     context = ToolContext(
@@ -144,7 +144,7 @@ def test_permission_hook_rejects_unapproved_bash(tmp_path: Path) -> None:
         workspace_path=tmp_path,
         config=config,
     )
-    tools = ToolRegistry([BashTool(config=config, cwd=tmp_path)])
+    tools = ToolRegistry([RunCommandTool()])
     loop = AgentLoop(
         config=config,
         llm=llm,
@@ -158,7 +158,7 @@ def test_permission_hook_rejects_unapproved_bash(tmp_path: Path) -> None:
         loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
 
 
-def test_permission_hook_allows_bash_with_auto_approve(tmp_path: Path) -> None:
+def test_permission_hook_allows_command_with_auto_approve(tmp_path: Path) -> None:
     llm: LLMClient = OneToolUseLLM()
     config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5, auto_approve=True)
     context = ToolContext(
@@ -167,7 +167,7 @@ def test_permission_hook_allows_bash_with_auto_approve(tmp_path: Path) -> None:
         workspace_path=tmp_path,
         config=config,
     )
-    tools = ToolRegistry([BashTool(config=config, cwd=tmp_path)])
+    tools = ToolRegistry([RunCommandTool()])
     loop = AgentLoop(
         config=config,
         llm=llm,
@@ -192,7 +192,7 @@ def test_todo_write_is_optional_tool() -> None:
     )
     tool = TodoWriteTool()
 
-    result = tool.run({"action": "add", "title": "Inspect README"}, context)
+    result = tool.invoke({"action": "add", "title": "Inspect README"}, context)
 
     assert result.success
     assert result.data["todos"][0]["title"] == "Inspect README"

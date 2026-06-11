@@ -4,7 +4,6 @@ import pytest
 
 from nano_agent.config import AgentConfig
 from nano_agent.tools.base import RuntimeTool, ToolContext, ToolInput, ToolRegistry, ToolResult
-from nano_agent.tools.bash import BashTool
 from nano_agent.tools.errors import ToolInputError
 
 
@@ -70,11 +69,3 @@ def test_runtime_tool_does_not_hide_programming_errors(tmp_path: Path) -> None:
 def test_tool_registry_rejects_duplicate_names() -> None:
     with pytest.raises(ValueError, match="already registered"):
         ToolRegistry([ExampleTool(), ExampleTool()])
-
-
-def test_bash_rejects_whitespace_only_command(tmp_path: Path) -> None:
-    context = make_context(tmp_path)
-    result = BashTool(config=context.config, cwd=tmp_path).invoke({"command": "   "}, context)
-
-    assert not result.success
-    assert result.error_code == "invalid_input"

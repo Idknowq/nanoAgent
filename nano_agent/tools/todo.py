@@ -13,6 +13,7 @@ from nano_agent.tools.base import (
     ToolResult,
     register_tool_factory,
 )
+from nano_agent.tools.errors import ToolInputError
 
 
 class TodoWriteInput(ToolInput):
@@ -126,22 +127,25 @@ class TodoWriteTool(RuntimeTool):
 
         if action == "add":
             if not title:
-                raise ValueError("todo title is required for add")
+                raise ToolInputError("todo title is required for add")
             item = self.todos.add(title=title, evidence=evidence)
             return ToolResult(success=True, summary=f"added {item.id}", data={"todos": self._dump()})
 
         if not item_id:
-            raise ValueError("todo id is required for update actions")
-        if action == "start":
-            self.todos.start(str(item_id), evidence=evidence)
-        elif action == "complete":
-            self.todos.complete(str(item_id), evidence=evidence)
-        elif action == "fail":
-            self.todos.fail(str(item_id), evidence=evidence)
-        elif action == "skip":
-            self.todos.skip(str(item_id), evidence=evidence)
-        else:
-            raise ValueError(f"unknown todo action: {action}")
+            raise ToolInputError("todo id is required for update actions")
+        try:
+            if action == "start":
+                self.todos.start(str(item_id), evidence=evidence)
+            elif action == "complete":
+                self.todos.complete(str(item_id), evidence=evidence)
+            elif action == "fail":
+                self.todos.fail(str(item_id), evidence=evidence)
+            elif action == "skip":
+                self.todos.skip(str(item_id), evidence=evidence)
+            else:
+                raise ToolInputError(f"unknown todo action: {action}")
+        except KeyError as exc:
+            raise ToolInputError(str(exc)) from exc
 
         return ToolResult(success=True, summary=f"{action} {item_id}", data={"todos": self._dump()})
 
