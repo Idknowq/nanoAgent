@@ -18,6 +18,8 @@ def build_default_hooks(config: AgentConfig) -> list[AgentHook]:
     }
     if config.auto_approve:
         auto_approved.add(ApprovalLevel.EXECUTE_RISKY)
+    if config.auto_approve_write:
+        auto_approved.add(ApprovalLevel.WRITE)
     hooks: list[AgentHook] = [
         PermissionHook(PermissionPolicy(auto_approved_levels=auto_approved)),
     ]

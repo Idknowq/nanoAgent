@@ -42,6 +42,26 @@ def test_auto_approve_only_adds_risky_execution() -> None:
     assert hook.policy.requires_approval(ApprovalLevel.PUBLISH)
 
 
+def test_auto_approve_write_only_adds_write_permission() -> None:
+    hook = build_default_hooks(AgentConfig(auto_approve_write=True))[0]
+
+    assert isinstance(hook, PermissionHook)
+    assert not hook.policy.requires_approval(ApprovalLevel.WRITE)
+    assert hook.policy.requires_approval(ApprovalLevel.EXECUTE_RISKY)
+    assert hook.policy.requires_approval(ApprovalLevel.PUBLISH)
+
+
+def test_auto_approve_flags_can_be_combined() -> None:
+    hook = build_default_hooks(
+        AgentConfig(auto_approve=True, auto_approve_write=True)
+    )[0]
+
+    assert isinstance(hook, PermissionHook)
+    assert not hook.policy.requires_approval(ApprovalLevel.EXECUTE_RISKY)
+    assert not hook.policy.requires_approval(ApprovalLevel.WRITE)
+    assert hook.policy.requires_approval(ApprovalLevel.PUBLISH)
+
+
 def test_default_hook_allows_clone_and_safe_execution() -> None:
     hook = build_default_hooks(AgentConfig())[0]
 

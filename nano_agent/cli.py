@@ -36,6 +36,10 @@ def run(
         bool,
         typer.Option("--auto-approve", help="Allow risky command execution without prompting."),
     ] = False,
+    auto_approve_write: Annotated[
+        bool,
+        typer.Option("--auto-approve-write", help="Allow workspace file edits without prompting."),
+    ] = False,
     llm: Annotated[
         Literal["deepseek"],
         typer.Option("--llm", help="LLM backend to use."),
@@ -50,6 +54,7 @@ def run(
         workspace_root=workdir,
         max_steps=max_steps,
         auto_approve=auto_approve,
+        auto_approve_write=auto_approve_write,
         llm_provider=llm,
         llm_model=model,
     )

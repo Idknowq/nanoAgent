@@ -15,6 +15,7 @@ class AgentConfig(BaseModel):
     max_steps: int = Field(default=20, ge=1)  # Agent 最大执行步数，防止后续 planner 死循环。
     command_timeout_seconds: int = Field(default=120, ge=1)  # 单个 shell 命令的超时时间。
     auto_approve: bool = False  # 是否自动批准高风险命令执行。
+    auto_approve_write: bool = False  # 是否自动批准工作区文件修改。
     max_consecutive_tool_calls: int = Field(default=3, ge=1)  # 同一工具连续调用提醒阈值。
     audit_enabled: bool = True  # 是否将工具调用写入当前 run 的 audit.jsonl。
     audit_max_input_chars: int = Field(default=4_000, ge=100)  # 审计输入摘要最大长度。
