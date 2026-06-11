@@ -70,3 +70,9 @@ def test_runtime_tool_does_not_hide_programming_errors(tmp_path: Path) -> None:
 def test_tool_registry_rejects_duplicate_names() -> None:
     with pytest.raises(ValueError, match="already registered"):
         ToolRegistry([ExampleTool(), ExampleTool()])
+
+
+def test_runtime_tool_uses_raw_input_for_audit_by_default() -> None:
+    input_data = {"value": "3"}
+
+    assert ExampleTool().audit_input(input_data) == input_data

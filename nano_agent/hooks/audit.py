@@ -55,7 +55,7 @@ class AuditHook(NoOpHook):
             tool_call_id=tool_use.id,
             tool_name=tool.name,
             approval_level=tool.approval_level,
-            input_summary=self._input_summary(tool_use.input),
+            input_summary=self._input_summary(tool.audit_input(tool_use.input)),
             success=result.success,
             summary=result.summary,
             error_code=result.error_code,

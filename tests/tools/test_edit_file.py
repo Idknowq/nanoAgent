@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from nano_agent.config import AgentConfig
+from nano_agent.models import ApprovalLevel
 from nano_agent.tools.base import ToolContext
 from nano_agent.tools.edit_file import EditFileTool
 
@@ -36,6 +37,7 @@ def test_edit_file_replaces_exact_text(tmp_path: Path) -> None:
         "bytes_before": 10,
         "bytes_after": 10,
     }
+    assert EditFileTool.approval_level == ApprovalLevel.WRITE
 
 
 def test_edit_file_supports_expected_multiple_replacements(tmp_path: Path) -> None:

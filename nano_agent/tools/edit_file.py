@@ -52,6 +52,16 @@ class EditFileTool(RuntimeTool):
     input_model = EditFileInput
     input_schema = EditFileInput.model_json_schema()
 
+    def audit_input(self, input_data: dict) -> dict:
+        old_text = input_data.get("old_text")
+        new_text = input_data.get("new_text")
+        return {
+            "path": input_data.get("path"),
+            "old_text_chars": len(old_text) if isinstance(old_text, str) else None,
+            "new_text_chars": len(new_text) if isinstance(new_text, str) else None,
+            "expected_replacements": input_data.get("expected_replacements", 1),
+        }
+
     def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         try:
             path = resolve_workspace_path(
@@ -77,9 +87,14 @@ class EditFileTool(RuntimeTool):
             )
 
         try:
-            data = path.read_bytes()
+            with path.open("rb") as file:
+                data = file.read(context.config.max_file_bytes + 1)
         except OSError as exc:
             raise ToolExecutionError(f"failed to read file: {exc}") from exc
+        if len(data) > context.config.max_file_bytes:
+            raise ToolInputError(
+                f"file exceeds max_file_bytes={context.config.max_file_bytes}"
+            )
         if b"\x00" in data:
             raise ToolInputError(f"binary file is not supported: {input_data['path']}")
         try:

@@ -8,6 +8,7 @@ from nano_agent.hooks.audit import AuditHook
 from nano_agent.loop import AgentLoop
 from nano_agent.models import AgentMessage, LLMResponse, RunSummary, ToolUseRequest
 from nano_agent.tools.base import ToolContext, ToolRegistry, ToolResult
+from nano_agent.tools.edit_file import EditFileTool
 from nano_agent.tools.todo import TodoWriteTool
 
 
@@ -95,6 +96,43 @@ def test_audit_hook_truncates_large_input_summary(tmp_path: Path) -> None:
     summary = read_records(context.run_dir / "audit.jsonl")[0]["input_summary"]
     assert len(summary) == 100
     assert summary.endswith("...[truncated]")
+
+
+def test_audit_hook_uses_tool_specific_input_redaction(tmp_path: Path) -> None:
+    context = make_context(tmp_path)
+    hook = AuditHook()
+    tool = EditFileTool()
+    old_text = "sensitive old source"
+    new_text = "sensitive new source"
+    tool_use = ToolUseRequest(
+        id="call-1",
+        name=tool.name,
+        input={
+            "path": "app.py",
+            "old_text": old_text,
+            "new_text": new_text,
+            "expected_replacements": 1,
+        },
+    )
+
+    hook.after_tool_call(
+        context,
+        tool,
+        tool_use,
+        ToolResult(success=True, summary="edited"),
+        0.01,
+    )
+
+    summary = read_records(context.run_dir / "audit.jsonl")[0]["input_summary"]
+    redacted = json.loads(summary)
+    assert old_text not in summary
+    assert new_text not in summary
+    assert redacted == {
+        "expected_replacements": 1,
+        "new_text_chars": len(new_text),
+        "old_text_chars": len(old_text),
+        "path": "app.py",
+    }
 
 
 def test_audit_hook_write_failure_does_not_raise(tmp_path: Path) -> None:

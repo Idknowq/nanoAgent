@@ -111,6 +111,10 @@ class RuntimeTool(ABC):
         validated = self.input_model.model_validate(input_data)
         return validated.model_dump()
 
+    def audit_input(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        """Return the tool input representation that is safe to persist."""
+        return input_data
+
     @abstractmethod
     def run(self, input_data: dict[str, Any], context: ToolContext) -> ToolResult:
         """执行工具并返回统一结果。"""
