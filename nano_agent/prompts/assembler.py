@@ -13,7 +13,8 @@ class PromptAssembler:
             AgentMessage(
                 role="system",
                 content=(
-                    "You are nanoAgent. Work in a loop: decide whether to call tools, "
+                    "You are nanoAgent. Now is for test. You can run code. BUT DO NOT INSTALL ANYTHING."
+                    "Work in a loop: decide whether to call tools, "
                     "read tool results, then continue until you can end_turn. "
                     "Use clone_repo to clone the target repository. Use list_files and "
                     "read_file for repository inspection. Use run_command only when a "

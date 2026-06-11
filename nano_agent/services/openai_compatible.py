@@ -23,7 +23,7 @@ class OpenAICompatibleLLMClient:
     def from_deepseek_env(cls, model: str | None = None) -> OpenAICompatibleLLMClient:
         api_key = os.getenv("DEEPSEEK_API_KEY")
         base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-        model_name = model or os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+        model_name = model or os.getenv("DEEPSEEK_MODEL", "deepseek-pro")
         if not api_key:
             raise RuntimeError("DEEPSEEK_API_KEY is not set in environment or .env")
         return cls(client=OpenAI(api_key=api_key, base_url=base_url), model=model_name)

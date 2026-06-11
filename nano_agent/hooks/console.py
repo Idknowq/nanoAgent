@@ -52,7 +52,7 @@ class ConsoleSectionProvider(Protocol):
         tool: RuntimeTool | None = None,
         tool_use: ToolUseRequest | None = None,
         result: ToolResult | None = None,
-    ) -> list[ConsoleSection]:
+    ) -> list[ConsoleSection]: # type: ignore
         """Build optional sections from the latest runtime state."""
 
 
