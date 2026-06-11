@@ -168,4 +168,5 @@ def build_default_tool_registry(context: ToolContext) -> ToolRegistry:
 def _import_builtin_tools() -> None:
     """导入内置工具模块，触发模块级工具工厂注册。"""
     import nano_agent.tools.bash  # noqa: F401
+    import nano_agent.tools.read_file  # noqa: F401
     import nano_agent.tools.todo  # noqa: F401
