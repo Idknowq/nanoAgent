@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shlex
 from typing import Protocol
 
 from nano_agent.config import AgentConfig
@@ -25,17 +24,16 @@ class ScriptedMvpLLMClient:
 
     def complete(self, messages: list[AgentMessage], tools: list[ToolSpec]) -> LLMResponse:
         self._step += 1
-        repo = shlex.quote(self.repo_url)
 
         if self._step == 1:
             return LLMResponse(
-                content="I will clone the repository with bash.",
+                content="I will clone the repository.",
                 stop_reason="tool_use",
                 tool_uses=[
                     ToolUseRequest(
                         id="toolu_clone",
-                        name="bash",
-                        input={"command": f"git clone {repo} ."},
+                        name="clone_repo",
+                        input={"repo_url": self.repo_url, "depth": 1},
                     )
                 ],
             )
