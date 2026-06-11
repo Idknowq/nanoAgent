@@ -11,6 +11,7 @@ from nano_agent.hooks.console import (
     ConsoleSectionProvider,
     RichConsoleRenderer,
 )
+from nano_agent.hooks.llm_metrics import LLMCallRecord, LLMMetricsHook
 from nano_agent.hooks.permission import (
     PermissionDeniedError,
     PermissionHook,
@@ -28,6 +29,8 @@ __all__ = [
     "ConsoleSection",
     "ConsoleSectionProvider",
     "HookResult",
+    "LLMCallRecord",
+    "LLMMetricsHook",
     "NoOpHook",
     "PermissionDeniedError",
     "PermissionHook",

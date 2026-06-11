@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 
 from nano_agent.hooks.base import AgentHook, HookResult
 from nano_agent.config import AgentConfig
@@ -40,23 +41,31 @@ class AgentLoop:
             self.context.current_step = step_index + 1
             self.context.max_steps = self.config.max_steps
             self.context.current_llm_call_id = f"llm-{self.context.current_step}"
+            self.context.current_llm_started_at = None
+            self.context.current_llm_duration_seconds = None
             run.steps = self.context.current_step
             run.llm_call_count += 1
             tool_specs = self.tools.specs()
             deferred_hook_messages: list[AgentMessage] = []
+            started: float | None = None
             try:
                 for hook in self.hooks:
                     self._append_hook_messages_to_conversation(
                         messages,
                         hook.before_llm_call(self.context, messages, tool_specs),
                     )
+                self.context.current_llm_started_at = datetime.now(timezone.utc)
+                started = time.monotonic()
                 response = self.llm.complete(messages=messages, tools=tool_specs)
+                self.context.current_llm_duration_seconds = time.monotonic() - started
                 for hook in self.hooks:
                     self._append_hook_messages(
                         deferred_hook_messages,
                         hook.after_llm_call(self.context, response),
                     )
             except Exception as exc:
+                if started is not None:
+                    self.context.current_llm_duration_seconds = time.monotonic() - started
                 for hook in self.hooks:
                     hook.on_error(self.context, exc)
                 raise

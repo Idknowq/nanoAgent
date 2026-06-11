@@ -17,6 +17,7 @@ class AgentConfig(BaseModel):
     auto_approve: bool = False  # 是否自动批准高风险命令执行。
     auto_approve_write: bool = False  # 是否自动批准工作区文件修改。
     max_consecutive_tool_calls: int = Field(default=3, ge=1)  # 同一工具连续调用提醒阈值。
+    llm_calls_enabled: bool = True  # 是否将 LLM 调用元数据写入 llm_calls.jsonl。
     audit_enabled: bool = True  # 是否将工具调用写入当前 run 的 audit.jsonl。
     audit_max_input_chars: int = Field(default=4_000, ge=100)  # 审计输入摘要最大长度。
     console_progress_enabled: bool = True  # 是否在终端显示 Agent 执行进度。

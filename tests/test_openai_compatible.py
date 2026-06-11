@@ -18,11 +18,19 @@ class FakeCompletions:
         self.last_request = kwargs
         tool_call = SimpleNamespace(
             id="call_1",
-            function=SimpleNamespace(name="todo_write", arguments='{"action":"add","title":"Inspect"}'),
+            function=SimpleNamespace(
+                name="todo_write", arguments='{"action":"add","title":"Inspect"}'
+            ),
         )
         message = SimpleNamespace(content=None, tool_calls=[tool_call])
         choice = SimpleNamespace(message=message)
-        return SimpleNamespace(choices=[choice])
+        usage = SimpleNamespace(
+            prompt_tokens=12,
+            completion_tokens=5,
+            total_tokens=17,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=2),
+        )
+        return SimpleNamespace(choices=[choice], model="deepseek-test", usage=usage)
 
 
 class FakeOpenAI:
@@ -43,8 +51,14 @@ def test_openai_compatible_client_parses_tool_calls() -> None:
     assert response.stop_reason == "tool_use"
     assert response.tool_uses[0].name == "todo_write"
     assert response.tool_uses[0].input["title"] == "Inspect"
+    assert response.model == "deepseek-test"
+    assert response.usage is not None
+    assert response.usage.total_tokens == 17
+    assert response.usage.cached_tokens == 2
     assert fake.completions.last_request["model"] == "deepseek-test"
-    assert fake.completions.last_request["tools"][0]["function"]["parameters"]["required"] == ["action"]
+    assert fake.completions.last_request["tools"][0]["function"]["parameters"]["required"] == [
+        "action"
+    ]
 
 
 def test_openai_message_conversion_preserves_assistant_tool_calls() -> None:

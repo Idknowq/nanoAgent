@@ -36,7 +36,9 @@ class ToolCallRecord(BaseModel):
     input_summary: str  # 工具输入摘要，避免保存过大的原始输入。
     output_summary: str  # 工具输出摘要，用于复盘 Agent 判断依据。
     approval_level: ApprovalLevel  # 本次工具调用对应的权限等级。
-    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))  # 调用开始时间。
+    started_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )  # 调用开始时间。
     duration_seconds: float | None = None  # 工具调用耗时；未统计时为空。
     success: bool  # 工具调用是否成功完成。
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, ClassVar
 
@@ -61,6 +62,8 @@ class ToolContext(BaseModel):
     current_step: int = 0  # 当前 Agent loop 步骤，供 hook 展示和限流使用。
     max_steps: int = 0  # 当前 Agent loop 最大步骤数。
     current_llm_call_id: str | None = None  # 当前步骤的 LLM 调用 id，关联消息和审计记录。
+    current_llm_started_at: datetime | None = None  # 当前 LLM 调用开始时间。
+    current_llm_duration_seconds: float | None = None  # 当前 LLM 调用耗时。
 
 
 class ToolInput(BaseModel):

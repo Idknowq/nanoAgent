@@ -3,6 +3,7 @@ import pytest
 from nano_agent.config import AgentConfig
 from nano_agent.hooks.audit import AuditHook
 from nano_agent.hooks.console import ConsoleProgressHook
+from nano_agent.hooks.llm_metrics import LLMMetricsHook
 from nano_agent.hooks.permission import PermissionHook, PermissionPolicy
 from nano_agent.hooks.rate_limit import RateLimitHook
 from nano_agent.hooks.registry import build_default_hooks
@@ -52,9 +53,7 @@ def test_auto_approve_write_only_adds_write_permission() -> None:
 
 
 def test_auto_approve_flags_can_be_combined() -> None:
-    hook = build_default_hooks(
-        AgentConfig(auto_approve=True, auto_approve_write=True)
-    )[0]
+    hook = build_default_hooks(AgentConfig(auto_approve=True, auto_approve_write=True))[0]
 
     assert isinstance(hook, PermissionHook)
     assert not hook.policy.requires_approval(ApprovalLevel.EXECUTE_RISKY)
@@ -78,7 +77,8 @@ def test_default_hooks_include_configured_rate_limit() -> None:
     assert isinstance(hooks[1], ConsoleProgressHook)
     assert isinstance(hooks[2], RateLimitHook)
     assert hooks[2].max_consecutive_calls == 5
-    assert isinstance(hooks[3], AuditHook)
+    assert isinstance(hooks[3], LLMMetricsHook)
+    assert isinstance(hooks[4], AuditHook)
 
 
 def test_audit_hook_can_be_disabled() -> None:
@@ -87,9 +87,16 @@ def test_audit_hook_can_be_disabled() -> None:
     assert not any(isinstance(hook, AuditHook) for hook in hooks)
 
 
+def test_llm_metrics_hook_can_be_disabled() -> None:
+    hooks = build_default_hooks(AgentConfig(llm_calls_enabled=False))
+
+    assert not any(isinstance(hook, LLMMetricsHook) for hook in hooks)
+
+
 def test_console_progress_hook_can_be_disabled() -> None:
     hooks = build_default_hooks(AgentConfig(console_progress_enabled=False))
 
     assert not any(isinstance(hook, ConsoleProgressHook) for hook in hooks)
     assert isinstance(hooks[0], PermissionHook)
     assert isinstance(hooks[1], RateLimitHook)
+    assert isinstance(hooks[2], LLMMetricsHook)

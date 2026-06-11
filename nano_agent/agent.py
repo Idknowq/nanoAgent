@@ -39,11 +39,13 @@ class NanoAgent:
             run.workspace_path = workspace_path
             run.artifacts = {
                 "config": "config.json",
-                "llm_calls": "llm_calls.jsonl",
-                "audit": "audit.jsonl",
                 "summary": "summary.json",
                 "messages": "messages.jsonl",
             }
+            if self.config.llm_calls_enabled:
+                run.artifacts["llm_calls"] = "llm_calls.jsonl"
+            if self.config.audit_enabled:
+                run.artifacts["audit"] = "audit.jsonl"
             self.config_store.save(run.run_id, run_dir, self.config)
             self.workspace_manager.save_run_summary(run)
             context = ToolContext(

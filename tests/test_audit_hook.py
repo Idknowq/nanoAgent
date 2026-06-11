@@ -26,9 +26,7 @@ def make_context(tmp_path: Path, *, run_dir: Path | None = None) -> ToolContext:
 
 def read_records(path: Path) -> list[dict]:
     return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
 
 
@@ -48,6 +46,7 @@ def test_audit_hook_writes_successful_tool_call(tmp_path: Path) -> None:
     records = read_records(context.run_dir / "audit.jsonl")
     assert len(records) == 1
     assert records[0]["run_id"] == "run-1"
+    assert records[0]["llm_call_id"] is None
     assert records[0]["step"] == 2
     assert records[0]["tool_call_id"] == "call-1"
     assert records[0]["tool_name"] == "todo_write"
@@ -203,4 +202,5 @@ def test_agent_loop_writes_audit_file_for_actual_tool_calls(tmp_path: Path) -> N
     assert len(result.tool_calls) == 1
     assert len(records) == 1
     assert records[0]["step"] == 1
+    assert records[0]["llm_call_id"] == "llm-1"
     assert records[0]["tool_name"] == "todo_write"

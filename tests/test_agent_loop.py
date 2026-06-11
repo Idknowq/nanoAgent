@@ -87,9 +87,7 @@ class RecordingHook(NoOpHook):
 class ReminderHook(NoOpHook):
     def before_tool_call(self, context, tool, tool_use):  # type: ignore[no-untyped-def]
         return HookResult(
-            injected_messages=[
-                AgentMessage(role="system", content=f"Reminder for {tool_use.name}")
-            ]
+            injected_messages=[AgentMessage(role="system", content=f"Reminder for {tool_use.name}")]
         )
 
 
@@ -146,10 +144,7 @@ def test_agent_loop_persists_messages_in_protocol_order(tmp_path: Path) -> None:
         "tool",
         "assistant",
     ]
-    records = [
-        json.loads(line)
-        for line in store.path.read_text(encoding="utf-8").splitlines()
-    ]
+    records = [json.loads(line) for line in store.path.read_text(encoding="utf-8").splitlines()]
     assert records[0]["llm_call_id"] is None
     assert records[1]["llm_call_id"] == "llm-1"
     assert records[-1]["llm_call_id"] == "llm-2"

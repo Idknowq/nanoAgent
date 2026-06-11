@@ -15,6 +15,7 @@ class ToolAuditRecord(BaseModel):
 
     timestamp: datetime
     run_id: str
+    llm_call_id: str | None
     step: int
     tool_call_id: str
     tool_name: str
@@ -51,6 +52,7 @@ class AuditHook(NoOpHook):
         record = ToolAuditRecord(
             timestamp=datetime.now(timezone.utc),
             run_id=context.run_id,
+            llm_call_id=context.current_llm_call_id,
             step=context.current_step,
             tool_call_id=tool_use.id,
             tool_name=tool.name,
