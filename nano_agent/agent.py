@@ -7,6 +7,7 @@ from nano_agent.hooks.registry import build_default_hooks
 from nano_agent.loop import AgentLoop
 from nano_agent.models import RunStatus, RunSummary
 from nano_agent.persistence.config_store import ConfigStore
+from nano_agent.persistence.message_store import MessageStore
 from nano_agent.prompts.assembler import PromptAssembler
 from nano_agent.services.llm import LLMClient
 from nano_agent.services.registry import create_llm_client
@@ -57,7 +58,14 @@ class NanoAgent:
             tools = build_default_tool_registry(context)
             hooks = build_default_hooks(self.config)
             initial_messages = self.prompt_assembler.build_initial_messages(repo_url, tools.specs())
-            loop = AgentLoop(config=self.config, llm=llm, tools=tools, context=context, hooks=hooks)
+            loop = AgentLoop(
+                config=self.config,
+                llm=llm,
+                tools=tools,
+                context=context,
+                hooks=hooks,
+                message_store=MessageStore(run_dir),
+            )
             run = loop.run(run=run, initial_messages=initial_messages)
         except Exception as exc:  # noqa: BLE001 - top-level agent boundary should capture failures.
             run.status = RunStatus.FAILED

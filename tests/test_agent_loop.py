@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from nano_agent.hooks.permission import PermissionDeniedError
 from nano_agent.hooks.registry import build_default_hooks
 from nano_agent.loop import AgentLoop
 from nano_agent.models import AgentMessage, LLMResponse, RunSummary, ToolUseRequest
+from nano_agent.persistence.message_store import MessageStore
 from nano_agent.services.llm import LLMClient
 from nano_agent.tools.base import ToolContext, ToolRegistry, build_default_tool_registry
 from nano_agent.tools.run_command import RunCommandTool
@@ -112,6 +114,45 @@ def test_agent_loop_executes_tool_and_records_result(tmp_path: Path, capsys) -> 
     assert result.tool_calls[0].success
     assert any(message.role == "tool" for message in result.messages)
     assert capsys.readouterr().out == ""
+
+
+def test_agent_loop_persists_messages_in_protocol_order(tmp_path: Path) -> None:
+    config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5)
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
+        config=config,
+    )
+    store = MessageStore(context.run_dir)
+    loop = AgentLoop(
+        config=config,
+        llm=OneToolUseLLM(),  # type: ignore[arg-type]
+        tools=ToolRegistry([RunCommandTool()]),
+        context=context,
+        message_store=store,
+    )
+
+    loop.run(
+        RunSummary(run_id="test", repo_url=context.repo_url),
+        [AgentMessage(role="user", content="start")],
+    )
+
+    persisted = store.load_messages()
+    assert [message.role for message in persisted] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    records = [
+        json.loads(line)
+        for line in store.path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert records[0]["llm_call_id"] is None
+    assert records[1]["llm_call_id"] == "llm-1"
+    assert records[-1]["llm_call_id"] == "llm-2"
 
 
 def test_agent_loop_calls_hooks(tmp_path: Path) -> None:
