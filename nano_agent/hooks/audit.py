@@ -14,19 +14,19 @@ from nano_agent.tools.base import RuntimeTool, ToolContext, ToolResult
 class ToolAuditRecord(BaseModel):
     """One replayable summary of a completed tool call."""
 
-    timestamp: datetime
-    run_id: str
-    llm_call_id: str | None
-    step: int
-    tool_call_id: str
-    tool_name: str
-    approval_level: ApprovalLevel
-    input_summary: str
-    success: bool
-    summary: str
-    error_code: str | None
-    error_message: str | None
-    duration_seconds: float
+    timestamp: datetime  # 工具调用审计记录的写入时间。
+    run_id: str  # 调用所属的 Agent 运行标识。
+    llm_call_id: str | None  # 发起本次工具调用的 LLM 调用标识。
+    step: int  # 工具调用发生时的 Agent loop 步骤。
+    tool_call_id: str  # LLM 为本次工具调用生成的标识。
+    tool_name: str  # 被调用的工具名称。
+    approval_level: ApprovalLevel  # 本次工具调用对应的权限等级。
+    input_summary: str  # 经过脱敏和截断的工具输入摘要。
+    success: bool  # 工具是否成功完成。
+    summary: str  # 工具返回的结果摘要。
+    error_code: str | None  # 工具失败时的稳定错误码。
+    error_message: str | None  # 工具失败时的错误说明。
+    duration_seconds: float  # 工具调用耗时。
 
 
 class AuditHook(NoOpHook):

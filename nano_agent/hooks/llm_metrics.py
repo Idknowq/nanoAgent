@@ -13,25 +13,25 @@ from nano_agent.tools.base import ToolContext, ToolSpec
 class LLMCallRecord(BaseModel):
     """Metadata for one LLM request without duplicating conversation content."""
 
-    schema_version: int = 1
-    timestamp: datetime
-    run_id: str
-    llm_call_id: str
-    step: int
-    provider: str
-    model: str | None
-    duration_seconds: float
-    success: bool
-    stop_reason: str | None
-    request_message_count: int
-    available_tool_count: int
-    requested_tool_call_count: int
-    input_tokens: int | None
-    output_tokens: int | None
-    total_tokens: int | None
-    cached_tokens: int | None
-    error_type: str | None
-    error_message: str | None
+    schema_version: int = 1  # LLM 调用记录的数据结构版本。
+    timestamp: datetime  # LLM 请求开始时间。
+    run_id: str  # 调用所属的 Agent 运行标识。
+    llm_call_id: str  # 当前运行内的 LLM 调用标识。
+    step: int  # 调用发生时的 Agent loop 步骤。
+    provider: str  # 实际使用的 LLM provider。
+    model: str | None  # 实际使用的模型名称。
+    duration_seconds: float  # LLM 请求耗时。
+    success: bool  # LLM 请求是否成功返回。
+    stop_reason: str | None  # 成功响应的停止原因。
+    request_message_count: int  # 请求上下文中的消息数量。
+    available_tool_count: int  # 请求中提供给模型的工具数量。
+    requested_tool_call_count: int  # 响应中模型请求的工具调用数量。
+    input_tokens: int | None  # 请求消耗的输入 token 数。
+    output_tokens: int | None  # 响应生成的输出 token 数。
+    total_tokens: int | None  # 本次调用消耗的 token 总数。
+    cached_tokens: int | None  # 输入 token 中命中缓存的数量。
+    error_type: str | None  # 失败时的异常类型。
+    error_message: str | None  # 失败时的截断异常信息。
 
 
 class LLMMetricsHook(NoOpHook):

@@ -63,10 +63,10 @@ class AgentMessage(BaseModel):
 class LLMUsage(BaseModel):
     """一次 LLM 调用返回的 token 使用统计。"""
 
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    total_tokens: int | None = None
-    cached_tokens: int | None = None
+    input_tokens: int | None = None  # 请求消耗的输入 token 数。
+    output_tokens: int | None = None  # 响应生成的输出 token 数。
+    total_tokens: int | None = None  # 本次调用消耗的 token 总数。
+    cached_tokens: int | None = None  # 输入 token 中命中缓存的数量。
 
 
 class LLMResponse(BaseModel):
@@ -87,10 +87,12 @@ class RunSummary(BaseModel):
     repo_url: str  # 用户输入的目标仓库地址。
     workspace_path: Path | None = None  # 目标仓库 clone 后所在的隔离工作区路径。
     status: RunStatus = RunStatus.PENDING  # 本次 Agent 运行的整体状态。
-    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    finished_at: datetime | None = None
-    steps: int = 0
-    llm_call_count: int = 0
+    started_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )  # 本次运行的开始时间。
+    finished_at: datetime | None = None  # 本次运行的结束时间；运行中为空。
+    steps: int = 0  # Agent loop 实际执行的步骤数。
+    llm_call_count: int = 0  # 本次运行发起的 LLM 调用次数。
     tool_calls: list[ToolCallRecord] = Field(default_factory=list)  # 工具调用审计记录。
     messages: list[AgentMessage] = Field(default_factory=list)  # Agent 循环中的消息历史。
     notes: list[str] = Field(default_factory=list)  # 面向用户或开发者的补充说明。

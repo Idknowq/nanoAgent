@@ -10,10 +10,10 @@ from nano_agent.persistence.json_io import atomic_write_json
 
 
 class ConfigSnapshot(BaseModel):
-    schema_version: int = 1
-    run_id: str
-    created_at: datetime
-    config: dict
+    schema_version: int = 1  # 配置快照的数据结构版本。
+    run_id: str  # 配置所属的 Agent 运行标识。
+    created_at: datetime  # 配置快照的写入时间。
+    config: dict  # 本次运行实际生效的非敏感配置。
 
 
 class ConfigStore:

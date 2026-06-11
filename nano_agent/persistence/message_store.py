@@ -12,11 +12,11 @@ from nano_agent.models import AgentMessage
 class MessageRecord(BaseModel):
     """One ordered message from the LLM conversation protocol."""
 
-    schema_version: int = 1
-    sequence: int
-    timestamp: datetime
-    llm_call_id: str | None
-    message: AgentMessage
+    schema_version: int = 1  # 消息记录的数据结构版本。
+    sequence: int  # 消息在当前运行中的递增序号。
+    timestamp: datetime  # 消息写入持久化文件的时间。
+    llm_call_id: str | None  # 消息关联的 LLM 调用标识；初始消息为空。
+    message: AgentMessage  # 完整的 Agent 协议消息。
 
 
 class MessageStore:
