@@ -14,7 +14,11 @@ def test_save_run_summary_uses_per_run_directory(tmp_path: Path) -> None:
     target = manager.save_run_summary(run)
 
     assert target == config.runs_root / "run-1" / "summary.json"
-    assert json.loads(target.read_text(encoding="utf-8"))["run_id"] == "run-1"
+    persisted = json.loads(target.read_text(encoding="utf-8"))
+    assert persisted["run_id"] == "run-1"
+    assert persisted["tool_call_count"] == 0
+    assert "messages" not in persisted
+    assert "tool_calls" not in persisted
 
 
 def test_run_dir_does_not_create_directory(tmp_path: Path) -> None:

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 from nano_agent.config import AgentConfig
 from nano_agent.models import RunSummary
+from nano_agent.persistence.summary_store import SummaryStore
 
 
 class WorkspaceManager:
@@ -14,6 +14,7 @@ class WorkspaceManager:
 
     def __init__(self, config: AgentConfig) -> None:
         self.config = config  # 保存工作区路径、run summary 路径等运行配置。
+        self.summary_store = SummaryStore()
 
     def create_run(self, repo_url: str) -> RunSummary:
         run_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
@@ -29,14 +30,7 @@ class WorkspaceManager:
         return self.config.runs_root / run_id
 
     def save_run_summary(self, run: RunSummary) -> Path:
-        run_dir = self.run_dir(run.run_id)
-        run_dir.mkdir(parents=True, exist_ok=True)
-        target = run_dir / "summary.json"
-        target.write_text(
-            json.dumps(run.model_dump(mode="json"), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        return target
+        return self.summary_store.save(self.run_dir(run.run_id), run)
 
     def _repo_name_from_url(self, repo_url: str) -> str:
         raw_name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")

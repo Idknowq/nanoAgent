@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from nano_agent.config import AgentConfig
 from nano_agent.hooks.registry import build_default_hooks
 from nano_agent.loop import AgentLoop
 from nano_agent.models import RunStatus, RunSummary
+from nano_agent.persistence.config_store import ConfigStore
 from nano_agent.prompts.assembler import PromptAssembler
 from nano_agent.services.llm import LLMClient
 from nano_agent.services.registry import create_llm_client
@@ -23,6 +26,7 @@ class NanoAgent:
         self.workspace_manager = WorkspaceManager(config=config)  # 管理工作区、clone 和运行记录。
         self.llm = llm  # 保存可替换的 LLM 客户端；为空时按配置创建真实模型客户端。
         self.prompt_assembler = PromptAssembler()  # 组装初始 system/user 消息。
+        self.config_store = ConfigStore()
 
     def run(self, repo_url: str) -> RunSummary:
         run = self.workspace_manager.create_run(repo_url=repo_url)
@@ -32,6 +36,15 @@ class NanoAgent:
             workspace_path = self.workspace_manager.next_workspace_path(repo_url, run.run_id)
             run_dir = self.workspace_manager.run_dir(run.run_id)
             run.workspace_path = workspace_path
+            run.artifacts = {
+                "config": "config.json",
+                "llm_calls": "llm_calls.jsonl",
+                "audit": "audit.jsonl",
+                "summary": "summary.json",
+                "messages": "messages.jsonl",
+            }
+            self.config_store.save(run.run_id, run_dir, self.config)
+            self.workspace_manager.save_run_summary(run)
             context = ToolContext(
                 run_id=run.run_id,
                 repo_url=repo_url,
@@ -50,5 +63,6 @@ class NanoAgent:
             run.status = RunStatus.FAILED
             run.notes.append(f"Agent failed: {exc}")
 
+        run.finished_at = datetime.now(timezone.utc)
         self.workspace_manager.save_run_summary(run)
         return run
