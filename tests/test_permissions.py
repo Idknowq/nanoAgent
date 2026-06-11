@@ -1,9 +1,9 @@
 import pytest
 
 from nano_agent.config import AgentConfig
+from nano_agent.hooks.permission import PermissionHook, PermissionPolicy
 from nano_agent.hooks.registry import build_default_hooks
 from nano_agent.models import ApprovalLevel
-from nano_agent.permissions.policy import PermissionHook, PermissionPolicy
 
 
 @pytest.mark.parametrize(

@@ -1,7 +1,7 @@
 from nano_agent.agent import NanoAgent
 from nano_agent.config import AgentConfig
 from nano_agent.context.compressor import ContextCompressor
-from nano_agent.permissions.policy import PermissionPolicy
+from nano_agent.hooks.permission import PermissionPolicy
 from nano_agent.skills.registry import SkillRegistry
 from nano_agent.workspace import WorkspaceManager
 

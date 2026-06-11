@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from nano_agent.config import AgentConfig
 from nano_agent.hooks.base import AgentHook
+from nano_agent.hooks.permission import PermissionHook, PermissionPolicy
 from nano_agent.models import ApprovalLevel
-from nano_agent.permissions.policy import PermissionHook, PermissionPolicy
 
 
 def build_default_hooks(config: AgentConfig) -> list[AgentHook]:

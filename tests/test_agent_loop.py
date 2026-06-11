@@ -4,10 +4,10 @@ import pytest
 
 from nano_agent.config import AgentConfig
 from nano_agent.hooks.base import NoOpHook
+from nano_agent.hooks.permission import PermissionDeniedError
 from nano_agent.hooks.registry import build_default_hooks
 from nano_agent.loop import AgentLoop
 from nano_agent.models import AgentMessage, LLMResponse, RunSummary, ToolUseRequest
-from nano_agent.permissions.errors import PermissionDeniedError
 from nano_agent.services.llm import LLMClient
 from nano_agent.tools.base import ToolContext, ToolRegistry, build_default_tool_registry
 from nano_agent.tools.run_command import RunCommandTool
