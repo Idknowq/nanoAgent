@@ -13,7 +13,6 @@ from nano_agent.tools.base import (
     ToolContext,
     ToolInput,
     ToolResult,
-    register_tool_factory,
 )
 
 
@@ -80,10 +79,3 @@ class BashTool(RuntimeTool):
                 "duration_seconds": duration,
             },
         )
-
-
-def _build_bash_tool(context: ToolContext) -> BashTool:
-    return BashTool(config=context.config, cwd=context.workspace_path)
-
-
-register_tool_factory(BashTool.name, _build_bash_tool)

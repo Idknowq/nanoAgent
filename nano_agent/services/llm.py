@@ -39,18 +39,15 @@ class ScriptedMvpLLMClient:
             )
 
         if self._step == 2:
-            command = (
-                "printf 'PWD\\n' && pwd && "
-                "printf '\\nKEY_FILES\\n' && "
-                "find . -maxdepth 2 "
-                "\\( -name README.md -o -name pyproject.toml -o -name package.json "
-                "-o -name requirements.txt \\) -print | sort"
-            )
             return LLMResponse(
                 content="I will inspect key repository files.",
                 stop_reason="tool_use",
                 tool_uses=[
-                    ToolUseRequest(id="toolu_inspect", name="bash", input={"command": command})
+                    ToolUseRequest(
+                        id="toolu_inspect",
+                        name="list_files",
+                        input={"path": ".", "max_depth": 2, "max_entries": 500},
+                    )
                 ],
             )
 

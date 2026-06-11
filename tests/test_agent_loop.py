@@ -128,10 +128,11 @@ def test_default_tool_registry_exposes_metadata(tmp_path: Path) -> None:
 
     specs = build_default_tool_registry(context).specs()
 
-    bash = next(spec for spec in specs if spec.name == "bash")
-    assert bash.category == "execution"
-    assert bash.requires_workspace
-    assert bash.is_mutating
+    command = next(spec for spec in specs if spec.name == "run_command")
+    assert command.category == "execution"
+    assert command.requires_workspace
+    assert command.is_mutating
+    assert all(spec.name != "bash" for spec in specs)
 
 
 def test_permission_hook_rejects_unapproved_bash(tmp_path: Path) -> None:

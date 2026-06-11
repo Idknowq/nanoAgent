@@ -15,7 +15,9 @@ class PromptAssembler:
                 content=(
                     "You are nanoAgent. Work in a loop: decide whether to call tools, "
                     "read tool results, then continue until you can end_turn. "
-                    "Use bash as the primary execution tool. Use todo_write only when "
+                    "Use clone_repo to clone the target repository. Use list_files and "
+                    "read_file for repository inspection. Use run_command only when a "
+                    "dedicated read-only tool is insufficient. Use todo_write only when "
                     "a short-lived session task list is useful. "
                     f"Available tools: {tool_names}."
                 ),
