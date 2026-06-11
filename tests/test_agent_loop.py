@@ -37,6 +37,24 @@ class OneToolUseLLM:
         return LLMResponse(content="end_turn", stop_reason="end_turn")
 
 
+class InvalidToolUseLLM:
+    def __init__(self, tool_name: str, input_data: dict) -> None:
+        self.calls = 0
+        self.tool_name = tool_name
+        self.input_data = input_data
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                stop_reason="tool_use",
+                tool_uses=[
+                    ToolUseRequest(id="toolu_invalid", name=self.tool_name, input=self.input_data)
+                ],
+            )
+        return LLMResponse(content="recovered", stop_reason="end_turn")
+
+
 class RecordingHook(NoOpHook):
     """测试用 hook，记录 loop 扩展点是否被调用。"""
 
@@ -177,3 +195,55 @@ def test_todo_write_is_optional_tool() -> None:
 
     assert result.success
     assert result.data["todos"][0]["title"] == "Inspect README"
+
+
+def test_agent_loop_returns_invalid_tool_input_to_llm(tmp_path: Path) -> None:
+    config = AgentConfig(workspace_root=tmp_path)
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        config=config,
+    )
+    llm = InvalidToolUseLLM("todo_write", {"action": "add", "unexpected": True})
+    loop = AgentLoop(
+        config=config,
+        llm=llm,  # type: ignore[arg-type]
+        tools=ToolRegistry([TodoWriteTool()]),
+        context=context,
+    )
+
+    result = loop.run(
+        RunSummary(run_id="test", repo_url=context.repo_url),
+        [AgentMessage(role="user", content="start")],
+    )
+
+    assert result.status == "succeeded"
+    assert not result.tool_calls[0].success
+    assert '"error_code": "invalid_input"' in result.messages[-2].content
+
+
+def test_agent_loop_returns_unknown_tool_to_llm(tmp_path: Path) -> None:
+    config = AgentConfig(workspace_root=tmp_path)
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        config=config,
+    )
+    llm = InvalidToolUseLLM("missing_tool", {})
+    loop = AgentLoop(
+        config=config,
+        llm=llm,  # type: ignore[arg-type]
+        tools=ToolRegistry(),
+        context=context,
+    )
+
+    result = loop.run(
+        RunSummary(run_id="test", repo_url=context.repo_url),
+        [AgentMessage(role="user", content="start")],
+    )
+
+    assert result.status == "succeeded"
+    assert result.tool_calls[0].tool_name == "missing_tool"
+    assert '"error_code": "tool_not_found"' in result.messages[-2].content

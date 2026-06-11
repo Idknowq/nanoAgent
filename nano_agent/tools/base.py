@@ -4,10 +4,11 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Callable, ClassVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from nano_agent.config import AgentConfig
 from nano_agent.models import ApprovalLevel
+from nano_agent.tools.errors import ToolError
 
 
 class ToolResult(BaseModel):
@@ -16,6 +17,24 @@ class ToolResult(BaseModel):
     success: bool  # 工具是否成功完成。
     summary: str  # 工具输出的简短摘要，供 Agent 决策和 run summary 使用。
     data: dict[str, Any] = Field(default_factory=dict)  # 工具返回的结构化数据。
+    error_code: str | None = None  # 稳定错误类型，供 LLM 和审计逻辑判断。
+    error_message: str | None = None  # 面向调用方的错误说明。
+
+    @classmethod
+    def failure(
+        cls,
+        *,
+        code: str,
+        message: str,
+        data: dict[str, Any] | None = None,
+    ) -> ToolResult:
+        return cls(
+            success=False,
+            summary=message,
+            data=data or {},
+            error_code=code,
+            error_message=message,
+        )
 
 
 class ToolSpec(BaseModel):
@@ -40,6 +59,12 @@ class ToolContext(BaseModel):
     config: AgentConfig  # 当前 Agent 的全局配置。
 
 
+class ToolInput(BaseModel):
+    """Base model for validated tool input."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
 class RuntimeTool(ABC):
     """Agent loop 可直接调用的运行时工具接口。"""
 
@@ -50,7 +75,38 @@ class RuntimeTool(ABC):
     category: ClassVar[str] = "general"  # 工具分类。
     enabled: ClassVar[bool] = True  # 工具是否默认可用。
     requires_workspace: ClassVar[bool] = False  # 工具是否依赖当前工作区。
+    workspace_must_exist: ClassVar[bool] = True  # 调用前工作区是否必须已存在。
     is_mutating: ClassVar[bool] = False  # 工具是否可能修改环境或外部状态。
+    input_model: ClassVar[type[BaseModel] | None] = None  # 工具运行时输入校验模型。
+
+    def invoke(self, input_data: dict[str, Any], context: ToolContext) -> ToolResult:
+        """Validate common preconditions and convert expected failures to results."""
+        if self.requires_workspace:
+            workspace = context.workspace_path
+            if workspace.exists() and not workspace.is_dir():
+                return ToolResult.failure(
+                    code="workspace_unavailable",
+                    message="agent workspace is not a directory",
+                )
+            if self.workspace_must_exist and not workspace.is_dir():
+                return ToolResult.failure(
+                    code="workspace_unavailable",
+                    message="agent workspace is unavailable",
+                )
+
+        try:
+            validated = self.validate_input(input_data)
+            return self.run(validated, context)
+        except ValidationError as exc:
+            return ToolResult.failure(code="invalid_input", message=str(exc))
+        except ToolError as exc:
+            return ToolResult.failure(code=exc.code, message=str(exc))
+
+    def validate_input(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        if self.input_model is None:
+            return input_data
+        validated = self.input_model.model_validate(input_data)
+        return validated.model_dump()
 
     @abstractmethod
     def run(self, input_data: dict[str, Any], context: ToolContext) -> ToolResult:
@@ -70,6 +126,8 @@ class ToolRegistry:
             self.register(tool)
 
     def register(self, tool: RuntimeTool) -> None:
+        if tool.name in self._tools:
+            raise ValueError(f"Tool already registered: {tool.name}")
         self._tools[tool.name] = tool
 
     def get(self, name: str) -> RuntimeTool:
@@ -96,6 +154,8 @@ class ToolRegistry:
 
 def register_tool_factory(name: str, factory: ToolFactory) -> None:
     """注册工具工厂，供工具模块自注册使用。"""
+    if name in _TOOL_FACTORIES and _TOOL_FACTORIES[name] is not factory:
+        raise ValueError(f"Tool factory already registered: {name}")
     _TOOL_FACTORIES[name] = factory
 
 

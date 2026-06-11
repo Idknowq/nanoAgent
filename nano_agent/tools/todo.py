@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from nano_agent.models import ApprovalLevel
-from nano_agent.tools.base import RuntimeTool, ToolContext, ToolResult, register_tool_factory
+from nano_agent.tools.base import (
+    RuntimeTool,
+    ToolContext,
+    ToolInput,
+    ToolResult,
+    register_tool_factory,
+)
+
+
+class TodoWriteInput(ToolInput):
+    action: Literal["add", "start", "complete", "fail", "skip"]
+    title: str = ""
+    id: str | None = None
+    evidence: str | None = Field(default=None)
 
 
 class TodoStatus(StrEnum):
@@ -85,6 +99,7 @@ class TodoWriteTool(RuntimeTool):
     description = "Create or update short-lived todos for the current agent turn."
     approval_level = ApprovalLevel.READ
     category = "planning"
+    input_model = TodoWriteInput
     input_schema = {
         "type": "object",
         "properties": {

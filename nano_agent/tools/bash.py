@@ -4,9 +4,21 @@ import subprocess
 import time
 from pathlib import Path
 
+from pydantic import Field
+
 from nano_agent.config import AgentConfig
 from nano_agent.models import ApprovalLevel
-from nano_agent.tools.base import RuntimeTool, ToolContext, ToolResult, register_tool_factory
+from nano_agent.tools.base import (
+    RuntimeTool,
+    ToolContext,
+    ToolInput,
+    ToolResult,
+    register_tool_factory,
+)
+
+
+class BashInput(ToolInput):
+    command: str = Field(min_length=1)
 
 
 class BashTool(RuntimeTool):
@@ -17,7 +29,9 @@ class BashTool(RuntimeTool):
     approval_level = ApprovalLevel.EXECUTE_RISKY
     category = "execution"
     requires_workspace = True
+    workspace_must_exist = False
     is_mutating = True
+    input_model = BashInput
     input_schema = {
         "type": "object",
         "properties": {
@@ -34,7 +48,7 @@ class BashTool(RuntimeTool):
         self.cwd = cwd  # 保存 bash 命令默认执行目录。
 
     def run(self, input_data: dict, context: ToolContext) -> ToolResult:
-        command = str(input_data.get("command", "")).strip()
+        command = input_data["command"].strip()
         if not command:
             raise ValueError("bash command cannot be empty")
         cwd = context.workspace_path if context.workspace_path else self.cwd

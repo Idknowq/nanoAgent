@@ -7,7 +7,7 @@ from nano_agent.hooks.base import AgentHook
 from nano_agent.config import AgentConfig
 from nano_agent.models import AgentMessage, RunStatus, RunSummary, ToolCallRecord
 from nano_agent.services.llm import LLMClient
-from nano_agent.tools.base import ToolContext, ToolRegistry
+from nano_agent.tools.base import ToolContext, ToolRegistry, ToolResult
 
 
 class AgentLoop:
@@ -58,12 +58,36 @@ class AgentLoop:
                 return run
 
             for tool_use in response.tool_uses:
-                tool = self.tools.get(tool_use.name)
+                try:
+                    tool = self.tools.get(tool_use.name)
+                except KeyError:
+                    result = ToolResult.failure(
+                        code="tool_not_found",
+                        message=f"Tool not found: {tool_use.name}",
+                    )
+                    run.tool_calls.append(
+                        ToolCallRecord(
+                            tool_name=tool_use.name,
+                            input_summary=json.dumps(tool_use.input, ensure_ascii=False),
+                            output_summary=result.summary,
+                            approval_level="read",
+                            duration_seconds=0.0,
+                            success=False,
+                        )
+                    )
+                    messages.append(
+                        AgentMessage(
+                            role="tool",
+                            content=json.dumps(result.model_dump(mode="json"), ensure_ascii=False),
+                            tool_call_id=tool_use.id,
+                        )
+                    )
+                    continue
                 started = time.monotonic()
                 try:
                     for hook in self.hooks:
                         hook.before_tool_call(self.context, tool, tool_use)
-                    result = tool.run(tool_use.input, self.context)
+                    result = tool.invoke(tool_use.input, self.context)
                     for hook in self.hooks:
                         hook.after_tool_call(self.context, tool, tool_use, result)
                 except Exception as exc:
