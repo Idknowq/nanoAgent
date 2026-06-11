@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 
 from pydantic import BaseModel
@@ -70,6 +71,8 @@ class AuditHook(NoOpHook):
             line = record.model_dump_json() + "\n"
             with audit_path.open("a", encoding="utf-8") as file:
                 file.write(line)
+                file.flush()
+                os.fsync(file.fileno())
         except OSError as exc:
             self._write_errors.append(str(exc))
         return None
