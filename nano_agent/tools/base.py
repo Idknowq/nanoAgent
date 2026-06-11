@@ -56,6 +56,7 @@ class ToolContext(BaseModel):
     run_id: str  # 当前 Agent run 的唯一标识。
     repo_url: str  # 用户输入的目标仓库地址。
     workspace_path: Path  # 当前 run 的隔离工作区路径。
+    run_dir: Path  # 当前 run 的持久化目录，由各组件写入自己的文件。
     config: AgentConfig  # 当前 Agent 的全局配置。
     current_step: int = 0  # 当前 Agent loop 步骤，供 hook 展示和限流使用。
     max_steps: int = 0  # 当前 Agent loop 最大步骤数。

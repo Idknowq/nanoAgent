@@ -35,6 +35,7 @@ def make_context(tmp_path: Path) -> ToolContext:
         run_id="test",
         repo_url="https://example.com/repo.git",
         workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
         config=AgentConfig(workspace_root=tmp_path),
     )
 

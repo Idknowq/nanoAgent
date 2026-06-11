@@ -30,11 +30,13 @@ class NanoAgent:
 
         try:
             workspace_path = self.workspace_manager.next_workspace_path(repo_url, run.run_id)
+            run_dir = self.workspace_manager.run_dir(run.run_id)
             run.workspace_path = workspace_path
             context = ToolContext(
                 run_id=run.run_id,
                 repo_url=repo_url,
                 workspace_path=workspace_path,
+                run_dir=run_dir,
                 config=self.config,
                 max_steps=self.config.max_steps,
             )

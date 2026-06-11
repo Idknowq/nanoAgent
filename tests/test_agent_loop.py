@@ -98,6 +98,7 @@ def test_agent_loop_executes_tool_and_records_result(tmp_path: Path, capsys) -> 
         run_id="test",
         repo_url="https://example.com/repo.git",
         workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
         config=config,
     )
     tools = ToolRegistry([RunCommandTool()])
@@ -123,6 +124,7 @@ def test_agent_loop_calls_hooks(tmp_path: Path) -> None:
         run_id="test",
         repo_url="https://example.com/repo.git",
         workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
         config=config,
     )
     tools = ToolRegistry([RunCommandTool()])
@@ -147,6 +149,7 @@ def test_agent_loop_appends_hook_reminders_after_tool_results(tmp_path: Path) ->
         run_id="test",
         repo_url="https://example.com/repo.git",
         workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
         config=config,
     )
     loop = AgentLoop(
@@ -173,6 +176,7 @@ def test_default_tool_registry_exposes_metadata(tmp_path: Path) -> None:
         run_id="test",
         repo_url="https://example.com/repo.git",
         workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
         config=config,
     )
 
@@ -192,6 +196,7 @@ def test_permission_hook_rejects_unapproved_command(tmp_path: Path) -> None:
         run_id="test",
         repo_url="https://example.com/repo.git",
         workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
         config=config,
     )
     tools = ToolRegistry([RunCommandTool()])
@@ -215,6 +220,7 @@ def test_permission_hook_allows_command_with_auto_approve(tmp_path: Path) -> Non
         run_id="test",
         repo_url="https://example.com/repo.git",
         workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
         config=config,
     )
     tools = ToolRegistry([RunCommandTool()])
@@ -238,6 +244,7 @@ def test_todo_write_is_optional_tool() -> None:
         run_id="test",
         repo_url="https://example.com/repo.git",
         workspace_path=Path("."),
+        run_dir=Path(".nano/runs/test"),
         config=config,
     )
     tool = TodoWriteTool()
@@ -254,6 +261,7 @@ def test_agent_loop_returns_invalid_tool_input_to_llm(tmp_path: Path) -> None:
         run_id="test",
         repo_url="https://example.com/repo.git",
         workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
         config=config,
     )
     llm = InvalidToolUseLLM("todo_write", {"action": "add", "unexpected": True})
@@ -280,6 +288,7 @@ def test_agent_loop_returns_unknown_tool_to_llm(tmp_path: Path) -> None:
         run_id="test",
         repo_url="https://example.com/repo.git",
         workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
         config=config,
     )
     llm = InvalidToolUseLLM("missing_tool", {})

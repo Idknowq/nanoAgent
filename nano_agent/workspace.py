@@ -24,9 +24,14 @@ class WorkspaceManager:
         repo_name = self._repo_name_from_url(repo_url)
         return self.config.workspace_root / f"{repo_name}-{run_id}"
 
+    def run_dir(self, run_id: str) -> Path:
+        """Return the directory that owns all persisted artifacts for one run."""
+        return self.config.runs_root / run_id
+
     def save_run_summary(self, run: RunSummary) -> Path:
-        self.config.runs_root.mkdir(parents=True, exist_ok=True)
-        target = self.config.runs_root / f"{run.run_id}.json"
+        run_dir = self.run_dir(run.run_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        target = run_dir / "summary.json"
         target.write_text(
             json.dumps(run.model_dump(mode="json"), indent=2, ensure_ascii=False),
             encoding="utf-8",
