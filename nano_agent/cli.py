@@ -4,10 +4,13 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import typer
+from dotenv import load_dotenv
 from rich.console import Console
 
 from nano_agent.agent import NanoAgent
 from nano_agent.config import AgentConfig
+
+load_dotenv()
 
 app = typer.Typer(help="nanoAgent repository diagnosis CLI.")
 console = Console()

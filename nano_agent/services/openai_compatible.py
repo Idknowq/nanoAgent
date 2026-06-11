@@ -4,7 +4,6 @@ import json
 import os
 from typing import Any
 
-from dotenv import load_dotenv
 from openai import OpenAI
 
 from nano_agent.config import AgentConfig
@@ -22,7 +21,6 @@ class OpenAICompatibleLLMClient:
 
     @classmethod
     def from_deepseek_env(cls, model: str | None = None) -> OpenAICompatibleLLMClient:
-        load_dotenv()
         api_key = os.getenv("DEEPSEEK_API_KEY")
         base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
         model_name = model or os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
