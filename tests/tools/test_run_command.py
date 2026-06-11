@@ -42,6 +42,36 @@ def test_run_command_executes_structured_arguments(tmp_path: Path) -> None:
     assert result.data["cwd"] == "."
 
 
+def test_run_command_resolves_relative_runtime_dir_before_changing_cwd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=workspace,
+        run_dir=Path(".nano/runs/test"),
+        runtime_dir=Path(".nano/runs/test/runtime"),
+        config=AgentConfig(
+            workspace_root=Path("workspace"),
+            runs_root=Path(".nano/runs"),
+            command_timeout_seconds=5,
+        ),
+    )
+
+    result = RunCommandTool().invoke(
+        {"program": "python3", "args": ["-c", "print('hello')"]},
+        context,
+    )
+
+    assert result.success
+    assert Path(result.data["resolved_program"]).is_absolute()
+    assert result.data["stdout_tail"] == "hello\n"
+
+
 def test_run_command_isolates_python_and_pip_from_host_environment(
     tmp_path: Path,
     monkeypatch,

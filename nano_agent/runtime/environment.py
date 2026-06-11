@@ -16,11 +16,11 @@ class ExecutionEnvironmentManager:
     _PYTHON_PROGRAMS = frozenset({"python3", "pytest", "ruff"})
 
     def __init__(self, runtime_dir: Path, config: AgentConfig) -> None:
-        self.runtime_dir = runtime_dir  # 当前 run 的隔离执行环境根目录。
+        self.runtime_dir = runtime_dir.resolve()  # 当前 run 的隔离执行环境绝对路径。
         self.config = config  # 当前 Agent 的全局配置。
-        self.python_venv = runtime_dir / "python" / "venv"  # Python 虚拟环境目录。
-        self.home_dir = runtime_dir / "home"  # 命令使用的隔离 HOME。
-        self.tmp_dir = runtime_dir / "tmp"  # 命令使用的临时文件目录。
+        self.python_venv = self.runtime_dir / "python" / "venv"  # Python 虚拟环境目录。
+        self.home_dir = self.runtime_dir / "home"  # 命令使用的隔离 HOME。
+        self.tmp_dir = self.runtime_dir / "tmp"  # 命令使用的临时文件目录。
 
     def resolve_program(self, program: str) -> Path:
         """Resolve an allowlisted program without falling back to the host Python environment."""
