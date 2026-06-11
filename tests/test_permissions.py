@@ -2,6 +2,7 @@ import pytest
 
 from nano_agent.config import AgentConfig
 from nano_agent.hooks.permission import PermissionHook, PermissionPolicy
+from nano_agent.hooks.rate_limit import RateLimitHook
 from nano_agent.hooks.registry import build_default_hooks
 from nano_agent.models import ApprovalLevel
 
@@ -46,3 +47,11 @@ def test_default_hook_allows_clone_and_safe_execution() -> None:
     assert not hook.policy.requires_approval(ApprovalLevel.NETWORK)
     assert not hook.policy.requires_approval(ApprovalLevel.EXECUTE_SAFE)
     assert hook.policy.requires_approval(ApprovalLevel.EXECUTE_RISKY)
+
+
+def test_default_hooks_include_configured_rate_limit() -> None:
+    hooks = build_default_hooks(AgentConfig(max_consecutive_tool_calls=5))
+
+    assert isinstance(hooks[0], PermissionHook)
+    assert isinstance(hooks[1], RateLimitHook)
+    assert hooks[1].max_consecutive_calls == 5

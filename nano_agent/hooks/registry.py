@@ -3,6 +3,7 @@ from __future__ import annotations
 from nano_agent.config import AgentConfig
 from nano_agent.hooks.base import AgentHook
 from nano_agent.hooks.permission import PermissionHook, PermissionPolicy
+from nano_agent.hooks.rate_limit import RateLimitHook
 from nano_agent.models import ApprovalLevel
 
 
@@ -15,4 +16,7 @@ def build_default_hooks(config: AgentConfig) -> list[AgentHook]:
     }
     if config.auto_approve:
         auto_approved.add(ApprovalLevel.EXECUTE_RISKY)
-    return [PermissionHook(PermissionPolicy(auto_approved_levels=auto_approved))]
+    return [
+        PermissionHook(PermissionPolicy(auto_approved_levels=auto_approved)),
+        RateLimitHook(max_consecutive_calls=config.max_consecutive_tool_calls),
+    ]

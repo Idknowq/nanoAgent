@@ -6,6 +6,7 @@ from nano_agent.hooks.permission import (
     PermissionHook,
     PermissionPolicy,
 )
+from nano_agent.hooks.rate_limit import RateLimitHook
 
 __all__ = [
     "AgentHook",
@@ -14,4 +15,5 @@ __all__ = [
     "PermissionDeniedError",
     "PermissionHook",
     "PermissionPolicy",
+    "RateLimitHook",
 ]
