@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 
-from nano_agent.hooks.base import AgentHook
+from nano_agent.hooks.base import AgentHook, HookResult
 from nano_agent.config import AgentConfig
 from nano_agent.models import AgentMessage, LLMResponse, RunStatus, RunSummary, ToolCallRecord
 from nano_agent.services.llm import LLMClient
@@ -32,13 +32,22 @@ class AgentLoop:
         run.messages = messages
 
         for step_index in range(self.config.max_steps):
+            self.context.current_step = step_index + 1
+            self.context.max_steps = self.config.max_steps
             tool_specs = self.tools.specs()
+            deferred_hook_messages: list[AgentMessage] = []
             try:
                 for hook in self.hooks:
-                    hook.before_llm_call(self.context, messages, tool_specs)
+                    self._append_hook_messages(
+                        messages,
+                        hook.before_llm_call(self.context, messages, tool_specs),
+                    )
                 response = self.llm.complete(messages=messages, tools=tool_specs)
                 for hook in self.hooks:
-                    hook.after_llm_call(self.context, response)
+                    self._append_hook_messages(
+                        deferred_hook_messages,
+                        hook.after_llm_call(self.context, response),
+                    )
             except Exception as exc:
                 for hook in self.hooks:
                     hook.on_error(self.context, exc)
@@ -54,6 +63,7 @@ class AgentLoop:
             )
 
             if response.stop_reason == "end_turn":
+                messages.extend(deferred_hook_messages)
                 run.status = RunStatus.SUCCEEDED
                 run.messages = messages
                 return run
@@ -87,15 +97,27 @@ class AgentLoop:
                 started = time.monotonic()
                 try:
                     for hook in self.hooks:
-                        hook.before_tool_call(self.context, tool, tool_use)
+                        self._append_hook_messages(
+                            deferred_hook_messages,
+                            hook.before_tool_call(self.context, tool, tool_use),
+                        )
                     result = tool.invoke(tool_use.input, self.context)
+                    duration = time.monotonic() - started
                     for hook in self.hooks:
-                        hook.after_tool_call(self.context, tool, tool_use, result)
+                        self._append_hook_messages(
+                            deferred_hook_messages,
+                            hook.after_tool_call(
+                                self.context,
+                                tool,
+                                tool_use,
+                                result,
+                                duration,
+                            ),
+                        )
                 except Exception as exc:
                     for hook in self.hooks:
                         hook.on_error(self.context, exc)
                     raise
-                duration = time.monotonic() - started
                 run.tool_calls.append(
                     ToolCallRecord(
                         tool_name=tool.name,
@@ -114,12 +136,21 @@ class AgentLoop:
                     )
                 )
 
+            messages.extend(deferred_hook_messages)
             run.messages = messages
 
         run.status = RunStatus.FAILED
         run.notes.append(f"Agent loop exceeded max_steps={self.config.max_steps}")
         run.messages = messages
         return run
+
+    def _append_hook_messages(
+        self,
+        target: list[AgentMessage],
+        result: HookResult | None,
+    ) -> None:
+        if result is not None:
+            target.extend(result.injected_messages)
 
     def _print_progress(self, step: int, response: LLMResponse) -> None:
         if response.stop_reason == "tool_use":

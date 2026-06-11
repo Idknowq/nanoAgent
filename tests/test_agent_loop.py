@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from nano_agent.config import AgentConfig
-from nano_agent.hooks.base import NoOpHook
+from nano_agent.hooks.base import HookResult, NoOpHook
 from nano_agent.hooks.permission import PermissionDeniedError
 from nano_agent.hooks.registry import build_default_hooks
 from nano_agent.loop import AgentLoop
@@ -70,8 +70,25 @@ class RecordingHook(NoOpHook):
     def before_tool_call(self, context, tool, tool_use):  # type: ignore[no-untyped-def]
         self.events.append("before_tool_call")
 
-    def after_tool_call(self, context, tool, tool_use, result):  # type: ignore[no-untyped-def]
+    def after_tool_call(  # type: ignore[no-untyped-def]
+        self,
+        context,
+        tool,
+        tool_use,
+        result,
+        duration_seconds,
+    ):
         self.events.append("after_tool_call")
+        self.duration_seconds = duration_seconds
+
+
+class ReminderHook(NoOpHook):
+    def before_tool_call(self, context, tool, tool_use):  # type: ignore[no-untyped-def]
+        return HookResult(
+            injected_messages=[
+                AgentMessage(role="system", content=f"Reminder for {tool_use.name}")
+            ]
+        )
 
 
 def test_agent_loop_executes_tool_and_records_result(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
@@ -119,6 +136,35 @@ def test_agent_loop_calls_hooks(tmp_path: Path) -> None:
     assert "after_llm_call" in hook.events
     assert "before_tool_call" in hook.events
     assert "after_tool_call" in hook.events
+    assert hook.duration_seconds >= 0
+    assert context.current_step == 2
+    assert context.max_steps == config.max_steps
+
+
+def test_agent_loop_appends_hook_reminders_after_tool_results(tmp_path: Path) -> None:
+    config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5)
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        config=config,
+    )
+    loop = AgentLoop(
+        config=config,
+        llm=OneToolUseLLM(),  # type: ignore[arg-type]
+        tools=ToolRegistry([RunCommandTool()]),
+        context=context,
+        hooks=[ReminderHook()],
+    )
+
+    result = loop.run(
+        RunSummary(run_id="test", repo_url=context.repo_url),
+        [AgentMessage(role="user", content="start")],
+    )
+
+    roles = [message.role for message in result.messages]
+    assert roles[:4] == ["user", "assistant", "tool", "system"]
+    assert result.messages[3].content == "Reminder for run_command"
 
 
 def test_default_tool_registry_exposes_metadata(tmp_path: Path) -> None:

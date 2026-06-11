@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from nano_agent.hooks.base import NoOpHook
+from nano_agent.hooks.base import HookResult, NoOpHook
 from nano_agent.models import ApprovalLevel, ToolUseRequest
 from nano_agent.tools.base import RuntimeTool, ToolContext
 
@@ -37,8 +37,9 @@ class PermissionHook(NoOpHook):
         context: ToolContext,
         tool: RuntimeTool,
         tool_use: ToolUseRequest,
-    ) -> None:
+    ) -> HookResult | None:
         if self.policy.requires_approval(tool.approval_level):
             raise PermissionDeniedError(
                 f"Tool '{tool.name}' requires approval level '{tool.approval_level}'."
             )
+        return None

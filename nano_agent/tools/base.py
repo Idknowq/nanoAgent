@@ -57,6 +57,8 @@ class ToolContext(BaseModel):
     repo_url: str  # 用户输入的目标仓库地址。
     workspace_path: Path  # 当前 run 的隔离工作区路径。
     config: AgentConfig  # 当前 Agent 的全局配置。
+    current_step: int = 0  # 当前 Agent loop 步骤，供 hook 展示和限流使用。
+    max_steps: int = 0  # 当前 Agent loop 最大步骤数。
 
 
 class ToolInput(BaseModel):

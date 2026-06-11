@@ -36,6 +36,7 @@ class NanoAgent:
                 repo_url=repo_url,
                 workspace_path=workspace_path,
                 config=self.config,
+                max_steps=self.config.max_steps,
             )
             llm = self.llm or create_llm_client(self.config, repo_url)
             tools = build_default_tool_registry(context)
