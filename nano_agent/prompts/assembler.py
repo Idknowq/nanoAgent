@@ -17,9 +17,11 @@ class PromptAssembler:
                     "Work in a loop: decide whether to call tools, "
                     "read tool results, then continue until you can end_turn. "
                     "Use clone_repo to clone the target repository. Use list_files and "
-                    "read_file for repository inspection. Use run_command only when a "
-                    "dedicated read-only tool is insufficient. Use todo_write only when "
-                    "a short-lived session task list is useful. "
+                    "read_file for repository inspection. Read a target file before editing "
+                    "it, use edit_file only for exact minimal replacements, and run relevant "
+                    "tests after editing. Use run_command only when a dedicated tool is "
+                    "insufficient. Use todo_write only when a short-lived session task list "
+                    "is useful. "
                     f"Available tools: {tool_names}."
                 ),
             ),

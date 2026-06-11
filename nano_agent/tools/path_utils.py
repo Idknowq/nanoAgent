@@ -40,3 +40,10 @@ def resolve_workspace_path(
 def workspace_relative_path(workspace: Path, path: Path) -> str:
     """Return a stable POSIX-style path relative to the workspace."""
     return path.resolve(strict=False).relative_to(workspace.resolve()).as_posix() or "."
+
+
+def reject_git_internal_path(workspace: Path, path: Path) -> None:
+    """Reject access to Git's internal metadata directory."""
+    relative = path.resolve(strict=False).relative_to(workspace.resolve())
+    if ".git" in relative.parts:
+        raise WorkspacePathError(".git paths are not allowed")
