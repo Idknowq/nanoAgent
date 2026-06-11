@@ -111,10 +111,7 @@ def test_agent_loop_executes_tool_and_records_result(tmp_path: Path, capsys) -> 
     assert result.tool_calls[0].tool_name == "run_command"
     assert result.tool_calls[0].success
     assert any(message.role == "tool" for message in result.messages)
-    assert capsys.readouterr().out.splitlines() == [
-        "[1/20] LLM response | tool_use \u2192 run_command",
-        "[2/20] LLM response | end_turn \u2192 succeeded",
-    ]
+    assert capsys.readouterr().out == ""
 
 
 def test_agent_loop_calls_hooks(tmp_path: Path) -> None:

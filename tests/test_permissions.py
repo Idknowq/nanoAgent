@@ -2,6 +2,7 @@ import pytest
 
 from nano_agent.config import AgentConfig
 from nano_agent.hooks.audit import AuditHook
+from nano_agent.hooks.console import ConsoleProgressHook
 from nano_agent.hooks.permission import PermissionHook, PermissionPolicy
 from nano_agent.hooks.rate_limit import RateLimitHook
 from nano_agent.hooks.registry import build_default_hooks
@@ -54,12 +55,21 @@ def test_default_hooks_include_configured_rate_limit() -> None:
     hooks = build_default_hooks(AgentConfig(max_consecutive_tool_calls=5))
 
     assert isinstance(hooks[0], PermissionHook)
-    assert isinstance(hooks[1], RateLimitHook)
-    assert hooks[1].max_consecutive_calls == 5
-    assert isinstance(hooks[2], AuditHook)
+    assert isinstance(hooks[1], ConsoleProgressHook)
+    assert isinstance(hooks[2], RateLimitHook)
+    assert hooks[2].max_consecutive_calls == 5
+    assert isinstance(hooks[3], AuditHook)
 
 
 def test_audit_hook_can_be_disabled() -> None:
     hooks = build_default_hooks(AgentConfig(audit_enabled=False))
 
     assert not any(isinstance(hook, AuditHook) for hook in hooks)
+
+
+def test_console_progress_hook_can_be_disabled() -> None:
+    hooks = build_default_hooks(AgentConfig(console_progress_enabled=False))
+
+    assert not any(isinstance(hook, ConsoleProgressHook) for hook in hooks)
+    assert isinstance(hooks[0], PermissionHook)
+    assert isinstance(hooks[1], RateLimitHook)

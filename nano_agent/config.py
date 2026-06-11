@@ -18,6 +18,7 @@ class AgentConfig(BaseModel):
     max_consecutive_tool_calls: int = Field(default=3, ge=1)  # 同一工具连续调用提醒阈值。
     audit_enabled: bool = True  # 是否将工具调用写入当前 run 的 audit.jsonl。
     audit_max_input_chars: int = Field(default=4_000, ge=100)  # 审计输入摘要最大长度。
+    console_progress_enabled: bool = True  # 是否在终端显示 Agent 执行进度。
     max_file_bytes: int = Field(default=128_000, ge=1)  # 单个文件最多读取的字节数。
     stdout_tail_chars: int = Field(default=16_000, ge=1)  # stdout 最多保留的尾部字符数。
     stderr_tail_chars: int = Field(default=16_000, ge=1)  # stderr 最多保留的尾部字符数。
