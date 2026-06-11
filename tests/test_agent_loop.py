@@ -74,7 +74,7 @@ class RecordingHook(NoOpHook):
         self.events.append("after_tool_call")
 
 
-def test_agent_loop_executes_tool_and_records_result(tmp_path: Path) -> None:
+def test_agent_loop_executes_tool_and_records_result(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
     llm: LLMClient = OneToolUseLLM()
     config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5)
     context = ToolContext(
@@ -93,6 +93,10 @@ def test_agent_loop_executes_tool_and_records_result(tmp_path: Path) -> None:
     assert result.tool_calls[0].tool_name == "run_command"
     assert result.tool_calls[0].success
     assert any(message.role == "tool" for message in result.messages)
+    assert capsys.readouterr().out.splitlines() == [
+        "[1/20] LLM response | tool_use \u2192 run_command",
+        "[2/20] LLM response | end_turn \u2192 succeeded",
+    ]
 
 
 def test_agent_loop_calls_hooks(tmp_path: Path) -> None:

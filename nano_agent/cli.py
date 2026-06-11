@@ -31,12 +31,12 @@ def run(
     ] = 20,
     auto_approve: Annotated[
         bool,
-        typer.Option("--auto-approve", help="Allow non-destructive MVP steps without prompting."),
+        typer.Option("--auto-approve", help="Allow risky command execution without prompting."),
     ] = False,
     llm: Annotated[
-        Literal["scripted", "deepseek"],
+        Literal["deepseek"],
         typer.Option("--llm", help="LLM backend to use."),
-    ] = "scripted",
+    ] = "deepseek",
     model: Annotated[
         str | None,
         typer.Option("--model", help="Override provider model name."),

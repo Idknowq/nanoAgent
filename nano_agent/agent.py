@@ -21,7 +21,7 @@ class NanoAgent:
     def __init__(self, config: AgentConfig, llm: LLMClient | None = None) -> None:
         self.config = config  # 保存本次 Agent 运行的全局配置。
         self.workspace_manager = WorkspaceManager(config=config)  # 管理工作区、clone 和运行记录。
-        self.llm = llm  # 保存可替换的 LLM 客户端；为空时使用 MVP 脚本客户端。
+        self.llm = llm  # 保存可替换的 LLM 客户端；为空时按配置创建真实模型客户端。
         self.prompt_assembler = PromptAssembler()  # 组装初始 system/user 消息。
 
     def run(self, repo_url: str) -> RunSummary:

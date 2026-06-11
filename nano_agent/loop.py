@@ -5,7 +5,7 @@ import time
 
 from nano_agent.hooks.base import AgentHook
 from nano_agent.config import AgentConfig
-from nano_agent.models import AgentMessage, RunStatus, RunSummary, ToolCallRecord
+from nano_agent.models import AgentMessage, LLMResponse, RunStatus, RunSummary, ToolCallRecord
 from nano_agent.services.llm import LLMClient
 from nano_agent.tools.base import ToolContext, ToolRegistry, ToolResult
 
@@ -31,7 +31,7 @@ class AgentLoop:
         messages = list(initial_messages)
         run.messages = messages
 
-        for _ in range(self.config.max_steps):
+        for step_index in range(self.config.max_steps):
             tool_specs = self.tools.specs()
             try:
                 for hook in self.hooks:
@@ -44,6 +44,7 @@ class AgentLoop:
                     hook.on_error(self.context, exc)
                 raise
 
+            self._print_progress(step_index + 1, response)
             messages.append(
                 AgentMessage(
                     role="assistant",
@@ -119,3 +120,13 @@ class AgentLoop:
         run.notes.append(f"Agent loop exceeded max_steps={self.config.max_steps}")
         run.messages = messages
         return run
+
+    def _print_progress(self, step: int, response: LLMResponse) -> None:
+        if response.stop_reason == "tool_use":
+            tool_names = ", ".join(tool_use.name for tool_use in response.tool_uses)
+            print(
+                f"[{step}/{self.config.max_steps}] LLM response | "
+                f"tool_use \u2192 {tool_names or 'no tools'}"
+            )
+            return
+        print(f"[{step}/{self.config.max_steps}] LLM response | end_turn \u2192 succeeded")

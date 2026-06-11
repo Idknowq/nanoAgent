@@ -28,5 +28,4 @@ def create_llm_client(config: AgentConfig, repo_url: str) -> LLMClient:
 
 def _import_builtin_providers() -> None:
     """导入内置 provider 模块，触发模块级注册。"""
-    import nano_agent.services.llm  # noqa: F401
     import nano_agent.services.openai_compatible  # noqa: F401

@@ -16,7 +16,11 @@ class PermissionPolicy(BaseModel):
     """
 
     auto_approved_levels: set[ApprovalLevel] = Field(
-        default_factory=lambda: {ApprovalLevel.READ}
+        default_factory=lambda: {
+            ApprovalLevel.READ,
+            ApprovalLevel.NETWORK,
+            ApprovalLevel.EXECUTE_SAFE,
+        }
     )  # 无需用户确认即可执行的权限等级集合。
 
     def requires_approval(self, level: ApprovalLevel) -> bool:
