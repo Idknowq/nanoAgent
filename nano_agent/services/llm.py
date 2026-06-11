@@ -3,7 +3,9 @@ from __future__ import annotations
 import shlex
 from typing import Protocol
 
+from nano_agent.config import AgentConfig
 from nano_agent.models import AgentMessage, LLMResponse, ToolUseRequest
+from nano_agent.services.registry import register_llm_provider
 from nano_agent.tools.base import ToolSpec
 
 
@@ -65,3 +67,10 @@ class StubLLMClient:
 
     def complete(self, messages: list[AgentMessage], tools: list[ToolSpec]) -> LLMResponse:
         return LLMResponse(content="end_turn: LLM integration is not configured.", stop_reason="end_turn")
+
+
+def _build_scripted_client(config: AgentConfig, repo_url: str) -> ScriptedMvpLLMClient:
+    return ScriptedMvpLLMClient(repo_url=repo_url)
+
+
+register_llm_provider("scripted", _build_scripted_client)

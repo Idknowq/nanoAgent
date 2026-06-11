@@ -6,7 +6,7 @@ from pathlib import Path
 
 from nano_agent.config import AgentConfig
 from nano_agent.models import ApprovalLevel
-from nano_agent.tools.base import RuntimeTool, ToolResult
+from nano_agent.tools.base import RuntimeTool, ToolContext, ToolResult, register_tool_factory
 
 
 class BashTool(RuntimeTool):
@@ -15,6 +15,9 @@ class BashTool(RuntimeTool):
     name = "bash"
     description = "Run a bash command in the current agent workspace."
     approval_level = ApprovalLevel.EXECUTE_RISKY
+    category = "execution"
+    requires_workspace = True
+    is_mutating = True
     input_schema = {
         "type": "object",
         "properties": {
@@ -30,17 +33,18 @@ class BashTool(RuntimeTool):
         self.config = config  # 保存命令超时和输出截断配置。
         self.cwd = cwd  # 保存 bash 命令默认执行目录。
 
-    def run(self, input_data: dict) -> ToolResult:
+    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         command = str(input_data.get("command", "")).strip()
         if not command:
             raise ValueError("bash command cannot be empty")
-        if not self.cwd.exists():
-            self.cwd.mkdir(parents=True, exist_ok=True)
+        cwd = context.workspace_path if context.workspace_path else self.cwd
+        if not cwd.exists():
+            cwd.mkdir(parents=True, exist_ok=True)
 
         started = time.monotonic()
         completed = subprocess.run(
             ["bash", "-lc", command],
-            cwd=self.cwd,
+            cwd=cwd,
             check=False,
             capture_output=True,
             text=True,
@@ -62,3 +66,10 @@ class BashTool(RuntimeTool):
                 "duration_seconds": duration,
             },
         )
+
+
+def _build_bash_tool(context: ToolContext) -> BashTool:
+    return BashTool(config=context.config, cwd=context.workspace_path)
+
+
+register_tool_factory(BashTool.name, _build_bash_tool)

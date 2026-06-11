@@ -10,3 +10,6 @@
 with path.open("rb") as f:
     data = f.read(self.config.max_file_bytes)
 ```
+
+cwd = context.workspace_path if context.workspace_path else self.cwd
+检查safe_path机制

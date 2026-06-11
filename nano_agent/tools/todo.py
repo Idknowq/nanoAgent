@@ -5,7 +5,7 @@ from enum import StrEnum
 from pydantic import BaseModel
 
 from nano_agent.models import ApprovalLevel
-from nano_agent.tools.base import RuntimeTool, ToolResult
+from nano_agent.tools.base import RuntimeTool, ToolContext, ToolResult, register_tool_factory
 
 
 class TodoStatus(StrEnum):
@@ -84,6 +84,7 @@ class TodoWriteTool(RuntimeTool):
     name = "todo_write"
     description = "Create or update short-lived todos for the current agent turn."
     approval_level = ApprovalLevel.READ
+    category = "planning"
     input_schema = {
         "type": "object",
         "properties": {
@@ -102,7 +103,7 @@ class TodoWriteTool(RuntimeTool):
     def __init__(self) -> None:
         self.todos = TodoList()  # 保存 todo_write 工具的内部短期状态。
 
-    def run(self, input_data: dict) -> ToolResult:
+    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         action = str(input_data.get("action", "add"))
         title = str(input_data.get("title", "")).strip()
         item_id = input_data.get("id")
@@ -131,3 +132,10 @@ class TodoWriteTool(RuntimeTool):
 
     def _dump(self) -> list[dict]:
         return [item.model_dump(mode="json") for item in self.todos.items]
+
+
+def _build_todo_write_tool(context: ToolContext) -> TodoWriteTool:
+    return TodoWriteTool()
+
+
+register_tool_factory(TodoWriteTool.name, _build_todo_write_tool)

@@ -7,7 +7,9 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from nano_agent.config import AgentConfig
 from nano_agent.models import AgentMessage, LLMResponse, ToolUseRequest
+from nano_agent.services.registry import register_llm_provider
 from nano_agent.tools.base import ToolSpec
 
 
@@ -90,3 +92,10 @@ class OpenAICompatibleLLMClient:
             }
             for tool in tools
         ]
+
+
+def _build_deepseek_client(config: AgentConfig, repo_url: str) -> OpenAICompatibleLLMClient:
+    return OpenAICompatibleLLMClient.from_deepseek_env(model=config.llm_model)
+
+
+register_llm_provider("deepseek", _build_deepseek_client)
