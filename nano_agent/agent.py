@@ -53,6 +53,7 @@ class NanoAgent:
                 repo_url=repo_url,
                 workspace_path=workspace_path,
                 run_dir=run_dir,
+                runtime_dir=run_dir / "runtime",
                 config=self.config,
                 max_steps=self.config.max_steps,
             )

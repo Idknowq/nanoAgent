@@ -8,6 +8,7 @@ import time
 from pydantic import Field
 
 from nano_agent.models import ApprovalLevel
+from nano_agent.runtime.environment import ExecutionEnvironmentManager
 from nano_agent.tools.base import (
     RuntimeTool,
     ToolContext,
@@ -56,16 +57,22 @@ class RunCommandTool(RuntimeTool):
         if not cwd.is_dir():
             raise ToolInputError(f"command cwd is not a directory: {input_data['cwd']}")
 
+        started = time.monotonic()
+        environment_manager = ExecutionEnvironmentManager(
+            runtime_dir=context.runtime_dir or context.run_dir / "runtime",
+            config=context.config,
+        )
+        resolved_program = environment_manager.resolve_program(program)
         argv = [program, *input_data["args"]]
+        process_argv = [str(resolved_program), *input_data["args"]]
         timeout = input_data["timeout_seconds"] or context.config.command_timeout_seconds
         timeout = min(timeout, 600)
-        started = time.monotonic()
 
         try:
             process = subprocess.Popen(
-                argv,
+                process_argv,
                 cwd=cwd,
-                env=self._restricted_environment(),
+                env=environment_manager.build_environment(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -88,6 +95,10 @@ class RunCommandTool(RuntimeTool):
         stderr_tail = stderr[-context.config.stderr_tail_chars :]
         data = {
             "argv": argv,
+            "resolved_program": str(resolved_program),
+            "execution_environment": (
+                "isolated" if context.config.execution_isolation_enabled else "host"
+            ),
             "cwd": workspace_relative_path(context.workspace_path, cwd),
             "exit_code": process.returncode,
             "stdout_tail": stdout_tail,
@@ -129,12 +140,6 @@ class RunCommandTool(RuntimeTool):
             except ProcessLookupError:
                 pass
             return process.communicate()
-
-    def _restricted_environment(self) -> dict[str, str]:
-        allowed_names = {"HOME", "LANG", "LC_ALL", "PATH", "TMPDIR", "VIRTUAL_ENV"}
-        environment = {name: value for name, value in os.environ.items() if name in allowed_names}
-        environment.setdefault("PATH", os.defpath)
-        return environment
 
 
 def _build_run_command_tool(context: ToolContext) -> RunCommandTool:
