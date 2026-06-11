@@ -71,7 +71,7 @@ class AgentLoop:
                             tool_name=tool_use.name,
                             input_summary=json.dumps(tool_use.input, ensure_ascii=False),
                             output_summary=result.summary,
-                            approval_level="read",
+                            approval_level="read", # type: ignore
                             duration_seconds=0.0,
                             success=False,
                         )
