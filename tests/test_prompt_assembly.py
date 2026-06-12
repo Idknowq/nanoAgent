@@ -258,10 +258,12 @@ def test_context_builder_extracts_bounded_tool_evidence(tmp_path: Path) -> None:
 
     assert snapshot.workspace_state == "ready"
     assert snapshot.inspected_files == ["README.md"]
-    assert snapshot.recent_events[0].summary == "read README"
+    assert snapshot.failures == []
 
 
-def test_prompt_context_hook_only_injects_changed_context(tmp_path: Path) -> None:
+def test_prompt_context_hook_injects_only_incremental_valuable_changes(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     context = ToolContext(
@@ -282,5 +284,135 @@ def test_prompt_context_hook_only_injects_changed_context(tmp_path: Path) -> Non
     repeated = hook.before_llm_call(context, messages, [])
 
     assert injected is not None
+    assert "<runtime_context_update>" in injected.injected_messages[0].content
     assert "<workspace_state>ready</workspace_state>" in injected.injected_messages[0].content
     assert repeated is None
+
+
+def test_prompt_context_hook_ignores_step_only_changes(tmp_path: Path) -> None:
+    context = ToolContext(
+        run_id="run-1",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "run-1",
+        config=AgentConfig(),
+        current_step=1,
+        max_steps=20,
+    )
+    hook = PromptContextHook()
+    messages = [AgentMessage(role="user", content="start")]
+
+    assert hook.before_llm_call(context, messages, []) is None
+    context.current_step = 2
+
+    assert hook.before_llm_call(context, messages, []) is None
+
+
+def test_prompt_context_hook_adds_each_failure_once_and_omits_rejected_command(
+    tmp_path: Path,
+) -> None:
+    context = ToolContext(
+        run_id="run-1",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "run-1",
+        config=AgentConfig(),
+        current_step=1,
+        max_steps=20,
+    )
+    hook = PromptContextHook()
+    messages = [AgentMessage(role="user", content="start")]
+    assert hook.before_llm_call(context, messages, []) is None
+    messages.extend(
+        [
+            AgentMessage(
+                role="assistant",
+                content="list",
+                tool_uses=[
+                    ToolUseRequest(
+                        id="list-1",
+                        name="list_files",
+                        input={"path": "."},
+                    ),
+                    ToolUseRequest(
+                        id="command-1",
+                        name="run_command",
+                        input={"program": "ls", "args": ["-la"]},
+                    ),
+                ],
+            ),
+            AgentMessage(
+                role="tool",
+                tool_call_id="list-1",
+                content=json.dumps(
+                    {
+                        "success": False,
+                        "summary": "workspace path is unavailable",
+                    }
+                ),
+            ),
+            AgentMessage(
+                role="tool",
+                tool_call_id="command-1",
+                content=json.dumps(
+                    {
+                        "success": False,
+                        "summary": "program is not allowed: ls",
+                    }
+                ),
+            ),
+        ]
+    )
+
+    injected = hook.before_llm_call(context, messages, [])
+    repeated = hook.before_llm_call(context, messages, [])
+
+    assert injected is not None
+    content = injected.injected_messages[0].content
+    assert content.count("<failure ") == 2
+    assert "workspace path is unavailable" in content
+    assert "program is not allowed: ls" in content
+    assert "successful_commands_added" not in content
+    assert repeated is None
+
+
+def test_prompt_context_hook_omits_skill_activation_event(tmp_path: Path) -> None:
+    context = ToolContext(
+        run_id="run-1",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "run-1",
+        config=AgentConfig(),
+        current_step=1,
+        max_steps=20,
+    )
+    hook = PromptContextHook()
+    messages = [AgentMessage(role="user", content="start")]
+    assert hook.before_llm_call(context, messages, []) is None
+    messages.extend(
+        [
+            AgentMessage(
+                role="assistant",
+                content="activate",
+                tool_uses=[
+                    ToolUseRequest(
+                        id="skill-1",
+                        name="activate_skill",
+                        input={"name": "python-repository"},
+                    )
+                ],
+            ),
+            AgentMessage(
+                role="tool",
+                tool_call_id="skill-1",
+                content=json.dumps(
+                    {
+                        "success": True,
+                        "summary": "skill 'python-repository' activated",
+                    }
+                ),
+            ),
+        ]
+    )
+
+    assert hook.before_llm_call(context, messages, []) is None

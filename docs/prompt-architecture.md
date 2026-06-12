@@ -23,12 +23,17 @@ The initial conversation is assembled in this order:
 The core prompt contains no run id, timestamp, repository URL, step counter, tool list, or
 other per-run values. Its SHA-256 hash is saved in `prompt.json`.
 
-During the run, `PromptContextHook` appends:
+During the run, `PromptContextHook` keeps the previous snapshot and appends only incremental
+updates when durable state or useful evidence changes:
 
-- a context update after repository state or tool evidence materially changes.
+- workspace readiness;
+- configured maximum steps;
+- newly inspected or modified files;
+- newly successful commands;
+- newly observed tool failures.
 
-It does not rewrite earlier messages and does not inject an update for step-number changes
-alone.
+It does not rewrite earlier messages, repeat old failures, inject step-number-only changes,
+or duplicate successful skill activation and clone events already represented elsewhere.
 
 ## Skills
 
@@ -66,16 +71,18 @@ reference data, not as authoritative instructions.
 
 ## Runtime context
 
-`RunContextBuilder` derives a bounded snapshot from persisted protocol messages. It retains:
+`RunContextBuilder` derives bounded durable state from persisted protocol messages. It
+retains:
 
 - clone state;
 - inspected files;
 - modified files;
-- commands;
-- recent tool success or failure summaries.
+- successful commands;
+- uniquely identified tool failures for incremental comparison.
 
-Raw tool output remains in the message stream. The context snapshot avoids copying full logs
-into repeated prompt updates.
+Raw tool output remains in the message stream. After the initial snapshot, updates use
+`<runtime_context_update>` and include only newly valuable changes instead of repeating the
+full accumulated snapshot.
 
 ## Current limits
 
