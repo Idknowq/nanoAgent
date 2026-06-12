@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from nano_agent.config import AgentConfig
+from nano_agent.context.compactor import CompactionStore, ContextCompactor
 from nano_agent.context.snapshot import RunContextSnapshot
-from nano_agent.hooks.prompt_context import PromptContextHook
 from nano_agent.hooks.registry import build_default_hooks
 from nano_agent.hooks.skill_activation import SkillActivationHook
 from nano_agent.loop import AgentLoop
@@ -53,6 +53,7 @@ class NanoAgent:
                 "summary": "summary.json",
                 "messages": "messages.jsonl",
                 "prompt": "prompt.json",
+                "context_checkpoint": "context_checkpoint.json",
             }
             if self.config.llm_calls_enabled:
                 run.artifacts["llm_calls"] = "llm_calls.jsonl"
@@ -80,7 +81,6 @@ class NanoAgent:
                 )
             )
             hooks = [
-                PromptContextHook(),
                 SkillActivationHook(skill_session),
                 *build_default_hooks(self.config),
             ]
@@ -99,13 +99,22 @@ class NanoAgent:
                 )
             )
             self.prompt_store.save(run.run_id, run_dir, prompt_bundle)
+            message_store = MessageStore(run_dir)
+            compactor = ContextCompactor(
+                config=self.config,
+                llm=llm,
+                store=CompactionStore(run.run_id, run_dir, message_store),
+                repo_url=repo_url,
+                workspace_path=workspace_path,
+            )
             loop = AgentLoop(
                 config=self.config,
                 llm=llm,
                 tools=tools,
                 context=context,
                 hooks=hooks,
-                message_store=MessageStore(run_dir),
+                message_store=message_store,
+                compactor=compactor,
             )
             run = loop.run(run=run, initial_messages=prompt_bundle.messages)
         except Exception as exc:  # noqa: BLE001 - top-level agent boundary should capture failures.

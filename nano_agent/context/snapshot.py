@@ -48,70 +48,12 @@ class RunContextSnapshot(BaseModel):
         return [f"<{name}>", *(f"- {escape(value)}" for value in values), f"</{name}>"]
 
 
-class RunContextUpdate(BaseModel):
-    """Only the valuable state and event changes since the previous LLM call."""
-
-    workspace_state: Literal["not_cloned", "ready"] | None = None  # 新的工作区状态。
-    max_steps: int | None = None  # 运行配置发生变化后的最大步骤数。
-    inspected_files_added: list[str] = Field(default_factory=list)  # 本轮新增已读文件。
-    modified_files_added: list[str] = Field(default_factory=list)  # 本轮新增已改文件。
-    successful_commands_added: list[str] = Field(default_factory=list)  # 本轮新增成功命令。
-    failures_added: list[ContextEvent] = Field(default_factory=list)  # 本轮新增失败事件。
-
-    @property
-    def has_changes(self) -> bool:
-        return any(
-            (
-                self.workspace_state is not None,
-                self.max_steps is not None,
-                self.inspected_files_added,
-                self.modified_files_added,
-                self.successful_commands_added,
-                self.failures_added,
-            )
-        )
-
-    def to_prompt(self) -> str:
-        lines = ["<runtime_context_update>"]
-        if self.workspace_state is not None:
-            lines.append(f"<workspace_state>{self.workspace_state}</workspace_state>")
-        if self.max_steps is not None:
-            lines.extend(
-                [
-                    "<configuration_changes>",
-                    f"<max_steps>{self.max_steps}</max_steps>",
-                    "</configuration_changes>",
-                ]
-            )
-        lines.extend(self._list_section("inspected_files_added", self.inspected_files_added))
-        lines.extend(self._list_section("modified_files_added", self.modified_files_added))
-        lines.extend(
-            self._list_section("successful_commands_added", self.successful_commands_added)
-        )
-        if self.failures_added:
-            lines.append("<failures_added>")
-            for event in self.failures_added:
-                lines.append(
-                    f'<failure tool="{escape(event.tool_name)}">'
-                    f"{escape(event.summary)}</failure>"
-                )
-            lines.append("</failures_added>")
-        lines.append("</runtime_context_update>")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _list_section(name: str, values: list[str]) -> list[str]:
-        if not values:
-            return []
-        return [f"<{name}>", *(f"- {escape(value)}" for value in values), f"</{name}>"]
-
-
 class RunContextBuilder:
-    """Build durable snapshots and calculate incremental prompt updates."""
+    """Build bounded durable snapshots from protocol messages."""
 
     def __init__(self, max_items: int = 20, max_failures: int = 20) -> None:
         self.max_items = max_items  # 每类累计事实最多保留的数量。
-        self.max_failures = max_failures  # 用于差异计算的失败事件最大数量。
+        self.max_failures = max_failures  # 快照最多保留的失败事件数量。
 
     def build(
         self,
@@ -169,30 +111,6 @@ class RunContextBuilder:
             failures=failures[-self.max_failures :],
         )
 
-    def diff(
-        self,
-        previous: RunContextSnapshot,
-        current: RunContextSnapshot,
-    ) -> RunContextUpdate:
-        previous_failures = {event.tool_call_id for event in previous.failures}
-        return RunContextUpdate(
-            workspace_state=(
-                current.workspace_state
-                if current.workspace_state != previous.workspace_state
-                else None
-            ),
-            max_steps=current.max_steps if current.max_steps != previous.max_steps else None,
-            inspected_files_added=self._added(previous.inspected_files, current.inspected_files),
-            modified_files_added=self._added(previous.modified_files, current.modified_files),
-            successful_commands_added=self._added(
-                previous.successful_commands,
-                current.successful_commands,
-            ),
-            failures_added=[
-                event for event in current.failures if event.tool_call_id not in previous_failures
-            ],
-        )
-
     @staticmethod
     def _tool_calls(messages: list[AgentMessage]) -> dict[str, tuple[str, dict[str, Any]]]:
         calls: dict[str, tuple[str, dict[str, Any]]] = {}
@@ -205,8 +123,3 @@ class RunContextBuilder:
     def _append_unique(target: list[str], value: str) -> None:
         if value and value not in target:
             target.append(value)
-
-    @staticmethod
-    def _added(previous: list[str], current: list[str]) -> list[str]:
-        previous_values = set(previous)
-        return [value for value in current if value not in previous_values]

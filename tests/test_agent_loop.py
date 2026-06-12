@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from nano_agent.config import AgentConfig
+from nano_agent.context.compactor import CompactionStore, ContextCompactor
 from nano_agent.hooks.base import HookResult, NoOpHook
 from nano_agent.hooks.permission import PermissionDeniedError
 from nano_agent.hooks.registry import build_default_hooks
@@ -91,6 +92,21 @@ class ReminderHook(NoOpHook):
         )
 
 
+class PromptTooLongThenFinishLLM:
+    """测试用 LLM，首次模拟上下文超限，重试后结束。"""
+
+    def __init__(self) -> None:
+        self.calls = 0  # 记录包含失败请求在内的调用次数。
+        self.request_sizes: list[int] = []  # 保存每次请求的消息数量。
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        self.request_sizes.append(len(messages))
+        if self.calls == 1:
+            raise RuntimeError("maximum context length exceeded")
+        return LLMResponse(content="recovered", stop_reason="end_turn")
+
+
 def test_agent_loop_executes_tool_and_records_result(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
     llm: LLMClient = OneToolUseLLM()
     config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5)
@@ -112,6 +128,54 @@ def test_agent_loop_executes_tool_and_records_result(tmp_path: Path, capsys) -> 
     assert result.tool_calls[0].success
     assert any(message.role == "tool" for message in result.messages)
     assert capsys.readouterr().out == ""
+
+
+def test_agent_loop_retries_once_after_reactive_compaction(tmp_path: Path) -> None:
+    config = AgentConfig(
+        context_max_input_tokens=100_000,
+        reactive_keep_recent_messages=2,
+    )
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
+        config=config,
+    )
+    llm = PromptTooLongThenFinishLLM()
+    store = MessageStore(context.run_dir)
+    compactor = ContextCompactor(
+        config=config,
+        llm=llm,  # type: ignore[arg-type]
+        store=CompactionStore("test", context.run_dir, store),
+        repo_url=context.repo_url,
+        workspace_path=context.workspace_path,
+    )
+    loop = AgentLoop(
+        config=config,
+        llm=llm,  # type: ignore[arg-type]
+        tools=ToolRegistry([]),
+        context=context,
+        message_store=store,
+        compactor=compactor,
+    )
+    initial = [
+        AgentMessage(role="system", content="core"),
+        AgentMessage(role="user", content="task"),
+        *[AgentMessage(role="assistant", content=f"old-{index}") for index in range(8)],
+    ]
+
+    result = loop.run(
+        RunSummary(run_id="test", repo_url=context.repo_url),
+        initial,
+    )
+
+    assert result.status == "succeeded"
+    assert result.llm_call_count == 2
+    assert llm.calls == 2
+    assert llm.request_sizes[1] < llm.request_sizes[0]
+    assert context.current_llm_call_id == "llm-1-retry-1"
+    assert compactor.reactive_compact_attempts == 1
 
 
 def test_agent_loop_persists_messages_in_protocol_order(tmp_path: Path) -> None:

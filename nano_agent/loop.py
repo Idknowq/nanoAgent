@@ -4,8 +4,9 @@ import json
 import time
 from datetime import datetime, timezone
 
-from nano_agent.hooks.base import AgentHook, HookResult
 from nano_agent.config import AgentConfig
+from nano_agent.context.compactor import ContextCompactor, is_prompt_too_long_error
+from nano_agent.hooks.base import AgentHook, HookResult
 from nano_agent.models import AgentMessage, RunStatus, RunSummary, ToolCallRecord
 from nano_agent.persistence.message_store import MessageStore
 from nano_agent.services.llm import LLMClient
@@ -23,13 +24,15 @@ class AgentLoop:
         context: ToolContext,
         hooks: list[AgentHook] | None = None,
         message_store: MessageStore | None = None,
+        compactor: ContextCompactor | None = None,
     ) -> None:
         self.config = config  # 保存最大步数等循环控制配置。
         self.llm = llm  # 保存当前使用的 LLM 客户端。
         self.tools = tools  # 保存本轮 Agent 可调用的工具注册表。
         self.context = context  # 保存本轮 Agent 的工具运行上下文。
         self.hooks = hooks or []  # 保存 loop 扩展点列表。
-        self.message_store = message_store
+        self.message_store = message_store  # 保存未压缩的完整协议消息流。
+        self.compactor = compactor  # LLM 调用前的上下文压缩管线，可为空。
 
     def run(self, run: RunSummary, initial_messages: list[AgentMessage]) -> RunSummary:
         messages = list(initial_messages)
@@ -40,35 +43,52 @@ class AgentLoop:
         for step_index in range(self.config.max_steps):
             self.context.current_step = step_index + 1
             self.context.max_steps = self.config.max_steps
-            self.context.current_llm_call_id = f"llm-{self.context.current_step}"
-            self.context.current_llm_started_at = None
-            self.context.current_llm_duration_seconds = None
             run.steps = self.context.current_step
-            run.llm_call_count += 1
             tool_specs = self.tools.specs()
-            deferred_hook_messages: list[AgentMessage] = []
-            started: float | None = None
-            try:
-                for hook in self.hooks:
-                    self._append_hook_messages_to_conversation(
-                        messages,
-                        hook.before_llm_call(self.context, messages, tool_specs),
-                    )
-                self.context.current_llm_started_at = datetime.now(timezone.utc)
-                started = time.monotonic()
-                response = self.llm.complete(messages=messages, tools=tool_specs)
-                self.context.current_llm_duration_seconds = time.monotonic() - started
-                for hook in self.hooks:
-                    self._append_hook_messages(
-                        deferred_hook_messages,
-                        hook.after_llm_call(self.context, response),
-                    )
-            except Exception as exc:
-                if started is not None:
+            if self.compactor is not None:
+                summary_calls = self.compactor.summary_llm_call_count
+                messages = self.compactor.prepare(messages, tool_specs)
+                run.llm_call_count += self.compactor.summary_llm_call_count - summary_calls
+            retry_index = 0
+            while True:
+                suffix = "" if retry_index == 0 else f"-retry-{retry_index}"
+                self.context.current_llm_call_id = (
+                    f"llm-{self.context.current_step}{suffix}"
+                )
+                self.context.current_llm_started_at = None
+                self.context.current_llm_duration_seconds = None
+                deferred_hook_messages: list[AgentMessage] = []
+                started: float | None = None
+                run.llm_call_count += 1
+                try:
+                    for hook in self.hooks:
+                        self._append_hook_messages_to_conversation(
+                            messages,
+                            hook.before_llm_call(self.context, messages, tool_specs),
+                        )
+                    self.context.current_llm_started_at = datetime.now(timezone.utc)
+                    started = time.monotonic()
+                    response = self.llm.complete(messages=messages, tools=tool_specs)
                     self.context.current_llm_duration_seconds = time.monotonic() - started
-                for hook in self.hooks:
-                    hook.on_error(self.context, exc)
-                raise
+                    for hook in self.hooks:
+                        self._append_hook_messages(
+                            deferred_hook_messages,
+                            hook.after_llm_call(self.context, response),
+                        )
+                    break
+                except Exception as exc:
+                    if started is not None:
+                        self.context.current_llm_duration_seconds = time.monotonic() - started
+                    for hook in self.hooks:
+                        hook.on_error(self.context, exc)
+                    if (
+                        self.compactor is None
+                        or not is_prompt_too_long_error(exc)
+                        or not self.compactor.can_reactive_compact()
+                    ):
+                        raise
+                    messages = self.compactor.reactive_compact(messages, tool_specs)
+                    retry_index += 1
 
             self._append_messages(
                 messages,

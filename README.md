@@ -17,6 +17,10 @@ Planned MVP loop:
 Prompt assembly uses a stable Markdown core plus selective skill, memory, and runtime-context
 injection. See [docs/prompt-architecture.md](docs/prompt-architecture.md).
 
+The active conversation is bounded by tool-result persistence, structural trimming,
+micro-compaction, LLM-generated summaries, and a one-shot prompt-too-long fallback. The raw
+protocol stream remains available in each run's `messages.jsonl`.
+
 ## Setup
 
 ```bash

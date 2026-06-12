@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from nano_agent.context.snapshot import RunContextSnapshot, RunContextUpdate
+from nano_agent.context.snapshot import RunContextSnapshot
 from nano_agent.memory.store import MemoryRecord
 from nano_agent.models import AgentMessage
 from nano_agent.skills.registry import LoadedSkill, SkillMetadata
@@ -147,7 +147,3 @@ class PromptAssembler:
     @staticmethod
     def context_message(snapshot: RunContextSnapshot) -> AgentMessage:
         return AgentMessage(role="system", content=snapshot.to_prompt())
-
-    @staticmethod
-    def context_update_message(update: RunContextUpdate) -> AgentMessage:
-        return AgentMessage(role="system", content=update.to_prompt())

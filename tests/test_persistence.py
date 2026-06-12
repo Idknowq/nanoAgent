@@ -89,6 +89,7 @@ def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path)
     assert {path.name for path in run_dir.iterdir()} == {
         "audit.jsonl",
         "config.json",
+        "context_checkpoint.json",
         "llm_calls.jsonl",
         "messages.jsonl",
         "prompt.json",
