@@ -14,6 +14,7 @@ ALLOWED_PROGRAMS = frozenset(
         "npm",
         "pytest",
         "python3",
+        "pip",
         "ruff",
     }
 )

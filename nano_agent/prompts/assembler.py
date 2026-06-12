@@ -13,7 +13,7 @@ class PromptAssembler:
             AgentMessage(
                 role="system",
                 content=(
-                    "You are nanoAgent. Now is for test. You can run code. BUT DO NOT INSTALL ANYTHING."
+                    "You are nanoAgent."
                     "Work in a loop: decide whether to call tools, "
                     "read tool results, then continue until you can end_turn. "
                     "Use clone_repo to clone the target repository. Use list_files and "
@@ -21,7 +21,8 @@ class PromptAssembler:
                     "it, use edit_file only for exact minimal replacements, and run relevant "
                     "tests after editing. Use run_command only when a dedicated tool is "
                     "insufficient. Use todo_write only when a short-lived session task list "
-                    "is useful. "
+                    "is useful."
+                    "Fix bugs and rerun until it runs correctly. If fails, output with 'FAILED' on the begining."
                     f"Available tools: {tool_names}."
                 ),
             ),

@@ -13,7 +13,7 @@ from nano_agent.tools.errors import ToolExecutionError
 class ExecutionEnvironmentManager:
     """Prepare and resolve programs inside one run-scoped execution environment."""
 
-    _PYTHON_PROGRAMS = frozenset({"python3", "pytest", "ruff"})
+    _PYTHON_PROGRAMS = frozenset({"python3", "pytest", "ruff", "pip"})
 
     def __init__(self, runtime_dir: Path, config: AgentConfig) -> None:
         self.runtime_dir = runtime_dir.resolve()  # 当前 run 的隔离执行环境绝对路径。

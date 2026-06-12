@@ -17,3 +17,5 @@ cwd = context.workspace_path if context.workspace_path else self.cwd
 每次listfile都使用根目录作为起点，优化以省一次API
 
 读多个文件时重复注入system prompt，可以设置stride
+
+docker沙箱隔离
