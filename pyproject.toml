@@ -15,6 +15,7 @@ dependencies = [
   "gitpython>=3.1.43",
   "openai>=1.40.0",
   "pydantic>=2.8.0",
+  "PyYAML>=6.0.2",
   "python-dotenv>=1.0.1",
   "rich>=13.7.1",
   "typer>=0.12.3",
@@ -26,6 +27,12 @@ nano-agent = "nano_agent.cli:app"
 [tool.setuptools.packages.find]
 include = ["nano_agent*"]
 
+[tool.setuptools.package-data]
+nano_agent = [
+  "prompts/templates/*.md",
+  "skills/builtin/*/SKILL.md",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
@@ -33,4 +40,3 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-

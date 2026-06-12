@@ -2,7 +2,8 @@
 
 `nanoAgent` is a lightweight AI Agent prototype for repository diagnosis and small-scope code repair.
 
-Current phase: project skeleton and single-agent tool-use loop interfaces.
+Current phase: single-agent tool-use loop with guarded tools, run persistence, and
+cache-oriented prompt composition.
 
 Planned MVP loop:
 
@@ -11,7 +12,10 @@ Planned MVP loop:
 3. Append the tool result back into the message history.
 4. Continue the loop until the LLM returns `end_turn`.
 5. Keep `todo_write` as an optional short-lived session planning tool.
-6. Use `bash` as the primary execution tool for repository work.
+6. Use structured `run_command` execution only when a dedicated tool is insufficient.
+
+Prompt assembly uses a stable Markdown core plus selective skill, memory, and runtime-context
+injection. See [docs/prompt-architecture.md](docs/prompt-architecture.md).
 
 ## Setup
 

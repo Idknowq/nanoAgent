@@ -73,7 +73,7 @@ def test_message_store_appends_and_recovers_complete_messages(tmp_path: Path) ->
     assert MessageStore(tmp_path / "run-1").load_messages() == messages
 
 
-def test_nano_agent_persists_five_run_files(tmp_path: Path) -> None:
+def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path) -> None:
     config = AgentConfig(
         workspace_root=tmp_path / "workspaces",
         runs_root=tmp_path / "runs",
@@ -91,6 +91,7 @@ def test_nano_agent_persists_five_run_files(tmp_path: Path) -> None:
         "config.json",
         "llm_calls.jsonl",
         "messages.jsonl",
+        "prompt.json",
         "summary.json",
     }
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
@@ -102,3 +103,11 @@ def test_nano_agent_persists_five_run_files(tmp_path: Path) -> None:
     assert summary["tool_call_count"] == 1
     assert "messages" not in summary
     assert audit["llm_call_id"] == llm_call["llm_call_id"] == "llm-1"
+    prompt = json.loads((run_dir / "prompt.json").read_text(encoding="utf-8"))
+    assert prompt["prompt_version"] == "mvp-v1"
+    assert prompt["included_sections"] == ["core", "skill_catalog", "context", "task"]
+    assert prompt["available_skill_names"] == [
+        "github-actions",
+        "node-repository",
+        "python-repository",
+    ]

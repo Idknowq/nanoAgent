@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -23,12 +24,49 @@ class InMemoryStore:
     def add(self, record: MemoryRecord) -> None:
         self._records.append(record)
 
-    def search(self, namespace: str) -> list[MemoryRecord]:
-        return [record for record in self._records if record.namespace == namespace]
+    def search(
+        self,
+        namespaces: str | list[str],
+        *,
+        tags: set[str] | None = None,
+        limit: int = 10,
+    ) -> list[MemoryRecord]:
+        namespace_set = {namespaces} if isinstance(namespaces, str) else set(namespaces)
+        records = [record for record in self._records if record.namespace in namespace_set]
+        if tags:
+            records = [record for record in records if tags.intersection(record.tags)]
+        return sorted(records, key=lambda record: (record.namespace, record.key))[:limit]
 
 
 class JsonlMemoryStore:
-    """预留的 JSONL 持久化记忆接口。"""
+    """Small append-only memory store with deterministic metadata filtering."""
 
     def __init__(self, path: Path) -> None:
         self.path = path  # 保存 JSONL 记忆文件的目标路径。
+
+    def add(self, record: MemoryRecord) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as file:
+            file.write(record.model_dump_json() + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+
+    def search(
+        self,
+        namespaces: str | list[str],
+        *,
+        tags: set[str] | None = None,
+        limit: int = 10,
+    ) -> list[MemoryRecord]:
+        if not self.path.exists():
+            return []
+        namespace_set = {namespaces} if isinstance(namespaces, str) else set(namespaces)
+        records = [
+            MemoryRecord.model_validate_json(line)
+            for line in self.path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        matches = [record for record in records if record.namespace in namespace_set]
+        if tags:
+            matches = [record for record in matches if tags.intersection(record.tags)]
+        return sorted(matches, key=lambda record: (record.namespace, record.key))[:limit]

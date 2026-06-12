@@ -26,3 +26,6 @@ class AgentConfig(BaseModel):
     max_file_bytes: int = Field(default=128_000, ge=1)  # 单个文件最多读取的字节数。
     stdout_tail_chars: int = Field(default=16_000, ge=1)  # stdout 最多保留的尾部字符数。
     stderr_tail_chars: int = Field(default=16_000, ge=1)  # stderr 最多保留的尾部字符数。
+    skills_root: Path | None = None  # 可选的 Markdown skill 目录；为空时使用内置 skills。
+    memory_path: Path | None = None  # 可选的跨运行 JSONL memory 文件。
+    memory_limit: int = Field(default=5, ge=0, le=20)  # 初始 prompt 最多注入的 memory 数量。
