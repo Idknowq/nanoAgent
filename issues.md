@@ -1,5 +1,3 @@
-读多个文件时重复注入system prompt，可以设置stride
-
 docker沙箱隔离
 
 tool context和context

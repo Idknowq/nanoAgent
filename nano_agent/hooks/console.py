@@ -111,10 +111,10 @@ class RichConsoleRenderer:
         duration = f"{event.duration_seconds:.2f}s" if event.duration_seconds is not None else "-"
         parts = [f"✓ LLM {event.step}/{event.max_steps}", model, duration]
         if event.input_tokens is not None:
-            token_detail = f"in {RichConsoleRenderer._format_tokens(event.input_tokens)}"
+            token_detail = f"in {RichConsoleRenderer._format_tokens(event.input_tokens)}" # type: ignore
             if event.output_tokens is not None:
                 token_detail += (
-                    f" · out {RichConsoleRenderer._format_tokens(event.output_tokens)}"
+                    f" · out {RichConsoleRenderer._format_tokens(event.output_tokens)}" # type: ignore
                 )
             if event.cached_tokens is not None and event.input_tokens > 0:
                 token_detail += f" · cache {event.cached_tokens / event.input_tokens:.0%}"
