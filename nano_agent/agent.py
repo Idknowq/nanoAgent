@@ -5,7 +5,6 @@ from pathlib import Path
 
 from nano_agent.config import AgentConfig
 from nano_agent.context.compactor import CompactionStore, ContextCompactor
-from nano_agent.context.snapshot import RunContextSnapshot
 from nano_agent.hooks.registry import build_default_hooks
 from nano_agent.hooks.skill_activation import SkillActivationHook
 from nano_agent.loop import AgentLoop
@@ -53,8 +52,9 @@ class NanoAgent:
                 "summary": "summary.json",
                 "messages": "messages.jsonl",
                 "prompt": "prompt.json",
-                "context_checkpoint": "context_checkpoint.json",
             }
+            if self.config.context_compaction_enabled:
+                run.artifacts["context_checkpoint"] = "context_checkpoint.json"
             if self.config.llm_calls_enabled:
                 run.artifacts["llm_calls"] = "llm_calls.jsonl"
             if self.config.audit_enabled:
@@ -90,10 +90,6 @@ class NanoAgent:
                         "Analyze the repository, diagnose defects, and make verified repairs."
                     ),
                     repo_url=repo_url,
-                    context=RunContextSnapshot(
-                        repo_url=repo_url,
-                        max_steps=self.config.max_steps,
-                    ),
                     available_skills=skill_registry.list_metadata(),
                     memories=self._load_memories(repo_url),
                 )

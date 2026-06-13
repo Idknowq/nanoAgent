@@ -310,9 +310,9 @@ def test_permission_hook_rejects_unapproved_command(tmp_path: Path) -> None:
         loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
 
 
-def test_permission_hook_allows_command_with_auto_approve(tmp_path: Path) -> None:
+def test_permission_hook_allows_command_when_enabled(tmp_path: Path) -> None:
     llm: LLMClient = OneToolUseLLM()
-    config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5, auto_approve=True)
+    config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5, allow_command=True)
     context = ToolContext(
         run_id="test",
         repo_url="https://example.com/repo.git",

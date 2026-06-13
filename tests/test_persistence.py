@@ -106,9 +106,27 @@ def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path)
     assert audit["llm_call_id"] == llm_call["llm_call_id"] == "llm-1"
     prompt = json.loads((run_dir / "prompt.json").read_text(encoding="utf-8"))
     assert prompt["prompt_version"] == "mvp-v1"
-    assert prompt["included_sections"] == ["core", "skill_catalog", "context", "task"]
+    assert prompt["included_sections"] == ["core", "skill_catalog", "task"]
     assert prompt["available_skill_names"] == [
         "github-actions",
         "node-repository",
         "python-repository",
     ]
+
+
+def test_disabled_context_compaction_omits_checkpoint_artifact(tmp_path: Path) -> None:
+    config = AgentConfig(
+        workspace_root=tmp_path / "workspaces",
+        runs_root=tmp_path / "runs",
+        console_progress_enabled=False,
+        context_compaction_enabled=False,
+    )
+
+    result = NanoAgent(config, llm=TodoThenFinishLLM()).run(  # type: ignore[arg-type]
+        "https://example.com/repo.git"
+    )
+
+    run_dir = config.runs_root / result.run_id
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    assert "context_checkpoint" not in summary["artifacts"]
+    assert not (run_dir / "context_checkpoint.json").exists()

@@ -16,9 +16,8 @@ class AgentConfig(BaseModel):
     command_timeout_seconds: int = Field(default=120, ge=1)  # 单个 shell 命令的超时时间。
     execution_isolation_enabled: bool = True  # 是否启用 run 级命令执行环境隔离。
     python_executable: Path | None = None  # 创建隔离 Python 环境时使用的解释器。
-    auto_approve: bool = False  # 是否自动批准高风险命令执行。
-    auto_approve_write: bool = False  # 是否自动批准工作区文件修改。
-    max_consecutive_tool_calls: int = Field(default=3, ge=1)  # 同一工具连续调用提醒阈值。
+    allow_command: bool = False  # 是否允许执行高风险命令工具。
+    allow_write: bool = False  # 是否允许修改工作区文件。
     llm_calls_enabled: bool = True  # 是否将 LLM 调用元数据写入 llm_calls.jsonl。
     audit_enabled: bool = True  # 是否将工具调用写入当前 run 的 audit.jsonl。
     audit_max_input_chars: int = Field(default=4_000, ge=100)  # 审计输入摘要最大长度。
@@ -32,7 +31,7 @@ class AgentConfig(BaseModel):
     context_compaction_enabled: bool = True  # 是否启用 LLM 调用前上下文压缩管线。
     tool_result_budget_chars: int = Field(default=200_000, ge=1)  # 单轮工具结果字符预算。
     tool_result_preview_chars: int = Field(default=2_000, ge=0)  # 大结果落盘后的预览长度。
-    snip_message_threshold: int = Field(default=50, ge=3)  # 触发中间消息裁剪的数量。
+    snip_compact_ratio: float = Field(default=0.5, gt=0, le=1)  # snip 的可用 token 阈值比例。
     snip_keep_head: int = Field(default=5, ge=1)  # snip 时保留的头部消息数。
     snip_keep_tail: int = Field(default=20, ge=1)  # snip 时保留的尾部消息数。
     micro_keep_recent_tool_results: int = Field(default=6, ge=0)  # 保留完整的最近工具结果数。

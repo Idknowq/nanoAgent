@@ -92,7 +92,9 @@ def test_tool_result_budget_persists_largest_latest_result(tmp_path: Path) -> No
 
 def test_snip_compact_keeps_tool_protocol_boundaries(tmp_path: Path) -> None:
     config = AgentConfig(
-        snip_message_threshold=6,
+        context_max_input_tokens=1_000,
+        context_output_reserve_tokens=0,
+        snip_compact_ratio=0.1,
         snip_keep_head=2,
         snip_keep_tail=2,
     )
@@ -100,8 +102,8 @@ def test_snip_compact_keeps_tool_protocol_boundaries(tmp_path: Path) -> None:
     messages = [
         AgentMessage(role="system", content="core"),
         AgentMessage(role="user", content="task"),
-        AgentMessage(role="assistant", content="old"),
-        AgentMessage(role="user", content="continue"),
+        AgentMessage(role="assistant", content="old " * 100),
+        AgentMessage(role="user", content="continue " * 100),
         *tool_exchange(
             "tool-1",
             json.dumps({"success": True, "summary": "read", "data": {"content": "result"}}),
@@ -109,12 +111,32 @@ def test_snip_compact_keeps_tool_protocol_boundaries(tmp_path: Path) -> None:
         AgentMessage(role="assistant", content="done"),
     ]
 
-    prepared = compactor.snip_compact(messages)
+    prepared = compactor.snip_compact(messages, [])
 
     tool_index = next(index for index, message in enumerate(prepared) if message.role == "tool")
     assert prepared[tool_index - 1].role == "assistant"
     assert prepared[tool_index - 1].tool_uses[0].id == prepared[tool_index].tool_call_id
     assert any("earlier messages removed" in message.content for message in prepared)
+
+
+def test_snip_compact_ignores_message_count_below_token_threshold(tmp_path: Path) -> None:
+    config = AgentConfig(
+        context_max_input_tokens=10_000,
+        context_output_reserve_tokens=0,
+        snip_compact_ratio=0.9,
+        snip_keep_head=2,
+        snip_keep_tail=2,
+    )
+    compactor, _, _ = build_compactor(tmp_path, config)
+    messages = [
+        AgentMessage(role="system", content="core"),
+        AgentMessage(role="user", content="task"),
+        *[AgentMessage(role="assistant", content=f"message-{index}") for index in range(100)],
+    ]
+
+    prepared = compactor.snip_compact(messages, [])
+
+    assert prepared == messages
 
 
 def test_micro_compact_only_replaces_old_large_tool_results(tmp_path: Path) -> None:
@@ -147,7 +169,7 @@ def test_prepare_compacts_history_and_persists_transcript(tmp_path: Path) -> Non
         context_max_input_tokens=1_000,
         context_output_reserve_tokens=0,
         context_auto_compact_ratio=0.1,
-        snip_message_threshold=100,
+        snip_compact_ratio=1,
         micro_tool_result_min_chars=10_000,
         max_auto_compactions=1,
     )

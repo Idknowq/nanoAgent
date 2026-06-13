@@ -14,6 +14,7 @@ load_dotenv()
 
 app = typer.Typer(help="nanoAgent repository diagnosis CLI.")
 console = Console()
+default_config = AgentConfig()  # CLI 未提供覆盖参数时使用的 Agent 默认配置。
 
 
 @app.callback()
@@ -31,14 +32,14 @@ def run(
     max_steps: Annotated[
         int,
         typer.Option("--max-steps", min=1, help="Maximum agent execution steps."),
-    ] = 20,
-    auto_approve: Annotated[
+    ] = default_config.max_steps,
+    allow_command: Annotated[
         bool,
-        typer.Option("--auto-approve", help="Allow risky command execution without prompting."),
+        typer.Option("--allow-command", help="Allow risky command execution."),
     ] = False,
-    auto_approve_write: Annotated[
+    allow_write: Annotated[
         bool,
-        typer.Option("--auto-approve-write", help="Allow workspace file edits without prompting."),
+        typer.Option("--allow-write", help="Allow workspace file edits."),
     ] = False,
     llm: Annotated[
         Literal["deepseek"],
@@ -53,8 +54,8 @@ def run(
     config = AgentConfig(
         workspace_root=workdir,
         max_steps=max_steps,
-        auto_approve=auto_approve,
-        auto_approve_write=auto_approve_write,
+        allow_command=allow_command,
+        allow_write=allow_write,
         llm_provider=llm,
         llm_model=model,
     )

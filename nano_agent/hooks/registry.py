@@ -6,7 +6,6 @@ from nano_agent.hooks.base import AgentHook
 from nano_agent.hooks.console import ConsoleProgressHook
 from nano_agent.hooks.llm_metrics import LLMMetricsHook
 from nano_agent.hooks.permission import PermissionHook, PermissionPolicy
-from nano_agent.hooks.rate_limit import RateLimitHook
 from nano_agent.models import ApprovalLevel
 
 
@@ -17,16 +16,15 @@ def build_default_hooks(config: AgentConfig) -> list[AgentHook]:
         ApprovalLevel.NETWORK,
         ApprovalLevel.EXECUTE_SAFE,
     }
-    if config.auto_approve:
+    if config.allow_command:
         auto_approved.add(ApprovalLevel.EXECUTE_RISKY)
-    if config.auto_approve_write:
+    if config.allow_write:
         auto_approved.add(ApprovalLevel.WRITE)
     hooks: list[AgentHook] = [
         PermissionHook(PermissionPolicy(auto_approved_levels=auto_approved)),
     ]
     if config.console_progress_enabled:
         hooks.append(ConsoleProgressHook())
-    hooks.append(RateLimitHook(max_consecutive_calls=config.max_consecutive_tool_calls))
     if config.llm_calls_enabled:
         hooks.append(LLMMetricsHook())
     if config.audit_enabled:

@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from nano_agent.config import AgentConfig
-from nano_agent.context.snapshot import RunContextBuilder
+from nano_agent.context.state import CompactionStateBuilder
 from nano_agent.models import AgentMessage
 from nano_agent.persistence.json_io import atomic_write_json
 from nano_agent.persistence.message_store import MessageStore
@@ -150,7 +150,7 @@ class ContextCompactor:
         if not self.config.context_compaction_enabled:
             return messages
         prepared = self.tool_result_budget(messages)
-        prepared = self.snip_compact(prepared)
+        prepared = self.snip_compact(prepared, tools)
         prepared = self.micro_compact(prepared)
         while (
             self.should_auto_compact(prepared, tools)
@@ -190,9 +190,13 @@ class ContextCompactor:
             total -= original_chars - len(message.content)
         return copied
 
-    def snip_compact(self, messages: list[AgentMessage]) -> list[AgentMessage]:
+    def snip_compact(
+        self,
+        messages: list[AgentMessage],
+        tools: list[ToolSpec],
+    ) -> list[AgentMessage]:
         copied = self._copy_messages(messages)
-        if len(copied) <= self.config.snip_message_threshold:
+        if self.estimator.estimate(copied, tools) < self._snip_threshold_tokens():
             return copied
         head_end = min(self.config.snip_keep_head, len(copied))
         tail_start = max(head_end, len(copied) - self.config.snip_keep_tail)
@@ -233,6 +237,14 @@ class ContextCompactor:
         )
         threshold = int(usable * self.config.context_auto_compact_ratio)
         return self.estimator.estimate(messages, tools) >= threshold
+
+    def _snip_threshold_tokens(self) -> int:
+        usable = max(
+            1,
+            self.config.context_max_input_tokens
+            - self.config.context_output_reserve_tokens,
+        )
+        return max(1, int(usable * self.config.snip_compact_ratio))
 
     def compact_history(
         self,
@@ -318,11 +330,9 @@ class ContextCompactor:
         return self.reactive_compact_attempts < self.config.max_reactive_compactions
 
     def _summarize(self, messages: list[AgentMessage], transcript: Path) -> str:
-        snapshot = RunContextBuilder().build(
+        state = CompactionStateBuilder().build(
             repo_url=self.repo_url,
             workspace_path=self.workspace_path,
-            current_step=0,
-            max_steps=self.config.max_steps,
             messages=messages,
         )
         conversation = json.dumps(
@@ -337,7 +347,7 @@ class ContextCompactor:
             "exact blockers. Never claim verification succeeded unless the transcript says "
             "it did.\n\n"
             f"Transcript: {self._relative_path(transcript)}\n"
-            f"Derived state:\n{snapshot.to_prompt()}\n\n"
+            f"Derived state:\n{state.to_prompt()}\n\n"
             f"Conversation:\n{conversation}"
         )
         self.summary_llm_call_count += 1

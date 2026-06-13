@@ -10,35 +10,42 @@ from pydantic import BaseModel, Field
 from nano_agent.models import AgentMessage
 
 
-class ContextEvent(BaseModel):
-    tool_call_id: str  # 事件对应的工具调用 id，用于避免重复注入。
-    tool_name: str  # 产生该上下文事件的工具名称。
+class CompactionEvent(BaseModel):
+    """One failed tool event retained for history summarization."""
+
+    tool_call_id: str  # 事件对应的工具调用 id。
+    tool_name: str  # 产生事件的工具名称。
     summary: str  # 工具失败结果的截断摘要。
 
 
-class RunContextSnapshot(BaseModel):
-    """Bounded durable state derived from the append-only conversation."""
+class CompactionState(BaseModel):
+    """Bounded state derived only for an automatic compact summary."""
 
     repo_url: str  # 当前运行处理的目标仓库地址。
     workspace_state: Literal["not_cloned", "ready"] = "not_cloned"  # 仓库 clone 状态。
-    current_step: int = 0  # 当前 Agent loop 步骤，仅用于初始上下文展示。
-    max_steps: int = 0  # 当前 Agent loop 最大步骤数。
     inspected_files: list[str] = Field(default_factory=list)  # 已成功读取的文件路径。
     modified_files: list[str] = Field(default_factory=list)  # 已成功修改的文件路径。
     successful_commands: list[str] = Field(default_factory=list)  # 已成功执行的命令摘要。
-    failures: list[ContextEvent] = Field(default_factory=list)  # 尚可用于后续判断的失败事件。
+    failures: list[CompactionEvent] = Field(default_factory=list)  # 摘要应保留的失败事件。
 
     def to_prompt(self) -> str:
         lines = [
-            "<runtime_context>",
+            "<compaction_state>",
             f"<repository>{escape(self.repo_url)}</repository>",
             f"<workspace_state>{self.workspace_state}</workspace_state>",
-            f"<step>{self.current_step}/{self.max_steps}</step>",
         ]
         lines.extend(self._list_section("inspected_files", self.inspected_files))
         lines.extend(self._list_section("modified_files", self.modified_files))
         lines.extend(self._list_section("successful_commands", self.successful_commands))
-        lines.append("</runtime_context>")
+        if self.failures:
+            lines.append("<failures>")
+            for event in self.failures:
+                lines.append(
+                    f'<failure tool="{escape(event.tool_name)}">'
+                    f"{escape(event.summary)}</failure>"
+                )
+            lines.append("</failures>")
+        lines.append("</compaction_state>")
         return "\n".join(lines)
 
     @staticmethod
@@ -48,27 +55,25 @@ class RunContextSnapshot(BaseModel):
         return [f"<{name}>", *(f"- {escape(value)}" for value in values), f"</{name}>"]
 
 
-class RunContextBuilder:
-    """Build bounded durable snapshots from protocol messages."""
+class CompactionStateBuilder:
+    """Derive bounded facts from protocol messages for summary generation."""
 
     def __init__(self, max_items: int = 20, max_failures: int = 20) -> None:
-        self.max_items = max_items  # 每类累计事实最多保留的数量。
-        self.max_failures = max_failures  # 快照最多保留的失败事件数量。
+        self.max_items = max_items  # 每类事实最多保留的数量。
+        self.max_failures = max_failures  # 最多保留的失败事件数量。
 
     def build(
         self,
         *,
         repo_url: str,
         workspace_path: Path,
-        current_step: int,
-        max_steps: int,
         messages: list[AgentMessage],
-    ) -> RunContextSnapshot:
+    ) -> CompactionState:
         calls = self._tool_calls(messages)
         inspected: list[str] = []
         modified: list[str] = []
         successful_commands: list[str] = []
-        failures: list[ContextEvent] = []
+        failures: list[CompactionEvent] = []
 
         for message in messages:
             if message.role != "tool" or not message.tool_call_id:
@@ -85,7 +90,7 @@ class RunContextBuilder:
             summary = str(result.get("summary", ""))[:500]
             if not success and tool_name != "activate_skill":
                 failures.append(
-                    ContextEvent(
+                    CompactionEvent(
                         tool_call_id=message.tool_call_id,
                         tool_name=tool_name,
                         summary=summary,
@@ -100,11 +105,9 @@ class RunContextBuilder:
                 args = " ".join(str(value) for value in tool_input.get("args", []))
                 self._append_unique(successful_commands, f"{program} {args}".strip())
 
-        return RunContextSnapshot(
+        return CompactionState(
             repo_url=repo_url,
             workspace_state="ready" if (workspace_path / ".git").exists() else "not_cloned",
-            current_step=current_step,
-            max_steps=max_steps,
             inspected_files=inspected[-self.max_items :],
             modified_files=modified[-self.max_items :],
             successful_commands=successful_commands[-self.max_items :],

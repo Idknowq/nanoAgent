@@ -6,7 +6,7 @@ The MVP prompt layer separates stable operating policy from task-specific state:
 
 1. Keep the core system prefix stable for provider-side prefix caching.
 2. Pass tool schemas through the model API instead of duplicating them in prompt text.
-3. Inject skills, memory, and runtime context only when relevant.
+3. Inject skills and memory only when relevant.
 4. Keep the raw conversation append-only for recovery while compacting only the active context.
 5. Persist prompt composition metadata for debugging and reproducibility.
 
@@ -17,16 +17,10 @@ The initial conversation is assembled in this order:
 1. Stable core system prompt from `nano_agent/prompts/templates/core.md`.
 2. Available skill metadata catalog, sorted by skill name.
 3. Retrieved memory, sorted by namespace and key.
-4. Initial structured runtime context.
-5. User task message.
+4. User task message.
 
 The core prompt contains no run id, timestamp, repository URL, step counter, tool list, or
 other per-run values. Its SHA-256 hash is saved in `prompt.json`.
-
-The runtime does not append a new runtime-context system message on every LLM call. Tool
-results already carry current evidence, while `RunContextBuilder` derives bounded state only
-when an automatic compact summary needs it. This avoids invalidating the stable prompt prefix
-for step-number-only changes.
 
 ## Skills
 
@@ -62,10 +56,10 @@ Repository, failure, and run memories must match the repository URL or repositor
 Global `user_preference` records may be loaded without repository tags. Memory is treated as
 reference data, not as authoritative instructions.
 
-## Runtime context
+## Compaction state
 
-`RunContextBuilder` derives bounded durable state from protocol messages for the initial
-snapshot and automatic compact summaries. It retains:
+`CompactionStateBuilder` derives bounded durable state only when an automatic compact summary
+needs it. It retains:
 
 - clone state;
 - inspected files;
@@ -82,8 +76,9 @@ Before each main LLM request, `ContextCompactor` applies this ordered pipeline:
 
 1. `tool_result_budget`: inspect the latest tool-result batch, persist the largest results
    under `tool-results/`, and replace them only when the reference is smaller.
-2. `snip_compact`: when message count exceeds the configured threshold, keep the stable head
-   and recent tail while preserving assistant-tool protocol boundaries.
+2. `snip_compact`: when estimated input tokens exceed its configured share of the usable
+   context budget, keep the stable head and recent tail while preserving assistant-tool
+   protocol boundaries.
 3. `micro_compact`: replace older oversized tool results with
    `[Earlier tool result compacted. Re-run if needed.]`.
 4. `compact_history`: if estimated input tokens still exceed the threshold, save a transcript

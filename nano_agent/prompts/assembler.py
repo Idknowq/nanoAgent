@@ -5,7 +5,6 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from nano_agent.context.snapshot import RunContextSnapshot
 from nano_agent.memory.store import MemoryRecord
 from nano_agent.models import AgentMessage
 from nano_agent.skills.registry import LoadedSkill, SkillMetadata
@@ -16,7 +15,6 @@ class PromptRequest(BaseModel):
 
     user_request: str  # 用户本次希望 Agent 完成的任务。
     repo_url: str  # 当前任务对应的目标仓库地址。
-    context: RunContextSnapshot  # 组装 prompt 时可见的结构化运行状态。
     available_skills: list[SkillMetadata] = Field(default_factory=list)  # 可用 Skill 元数据。
     memories: list[MemoryRecord] = Field(default_factory=list)  # 本次检索到的参考记忆。
 
@@ -66,8 +64,6 @@ class PromptAssembler:
             messages.append(self.memory_message(request.memories))
             sections.append("memory")
 
-        messages.append(self.context_message(request.context))
-        sections.append("context")
         messages.append(
             AgentMessage(
                 role="user",
@@ -143,7 +139,3 @@ class PromptAssembler:
             )
         lines.append("</retrieved_memory>")
         return AgentMessage(role="system", content="\n".join(lines))
-
-    @staticmethod
-    def context_message(snapshot: RunContextSnapshot) -> AgentMessage:
-        return AgentMessage(role="system", content=snapshot.to_prompt())

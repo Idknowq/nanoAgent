@@ -14,8 +14,8 @@ Planned MVP loop:
 5. Keep `todo_write` as an optional short-lived session planning tool.
 6. Use structured `run_command` execution only when a dedicated tool is insufficient.
 
-Prompt assembly uses a stable Markdown core plus selective skill, memory, and runtime-context
-injection. See [docs/prompt-architecture.md](docs/prompt-architecture.md).
+Prompt assembly uses a stable Markdown core plus selective skill and memory injection. See
+[docs/prompt-architecture.md](docs/prompt-architecture.md).
 
 The active conversation is bounded by tool-result persistence, structural trimming,
 micro-compaction, LLM-generated summaries, and a one-shot prompt-too-long fallback. The raw

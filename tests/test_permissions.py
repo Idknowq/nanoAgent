@@ -5,7 +5,6 @@ from nano_agent.hooks.audit import AuditHook
 from nano_agent.hooks.console import ConsoleProgressHook
 from nano_agent.hooks.llm_metrics import LLMMetricsHook
 from nano_agent.hooks.permission import PermissionHook, PermissionPolicy
-from nano_agent.hooks.rate_limit import RateLimitHook
 from nano_agent.hooks.registry import build_default_hooks
 from nano_agent.models import ApprovalLevel
 
@@ -34,8 +33,8 @@ def test_default_policy_requires_approval_for_sensitive_levels(level: ApprovalLe
     assert PermissionPolicy().requires_approval(level)
 
 
-def test_auto_approve_only_adds_risky_execution() -> None:
-    hook = build_default_hooks(AgentConfig(auto_approve=True))[0]
+def test_allow_command_only_adds_risky_execution() -> None:
+    hook = build_default_hooks(AgentConfig(allow_command=True))[0]
 
     assert isinstance(hook, PermissionHook)
     assert not hook.policy.requires_approval(ApprovalLevel.EXECUTE_RISKY)
@@ -43,8 +42,8 @@ def test_auto_approve_only_adds_risky_execution() -> None:
     assert hook.policy.requires_approval(ApprovalLevel.PUBLISH)
 
 
-def test_auto_approve_write_only_adds_write_permission() -> None:
-    hook = build_default_hooks(AgentConfig(auto_approve_write=True))[0]
+def test_allow_write_only_adds_write_permission() -> None:
+    hook = build_default_hooks(AgentConfig(allow_write=True))[0]
 
     assert isinstance(hook, PermissionHook)
     assert not hook.policy.requires_approval(ApprovalLevel.WRITE)
@@ -52,8 +51,8 @@ def test_auto_approve_write_only_adds_write_permission() -> None:
     assert hook.policy.requires_approval(ApprovalLevel.PUBLISH)
 
 
-def test_auto_approve_flags_can_be_combined() -> None:
-    hook = build_default_hooks(AgentConfig(auto_approve=True, auto_approve_write=True))[0]
+def test_allow_flags_can_be_combined() -> None:
+    hook = build_default_hooks(AgentConfig(allow_command=True, allow_write=True))[0]
 
     assert isinstance(hook, PermissionHook)
     assert not hook.policy.requires_approval(ApprovalLevel.EXECUTE_RISKY)
@@ -70,15 +69,13 @@ def test_default_hook_allows_clone_and_safe_execution() -> None:
     assert hook.policy.requires_approval(ApprovalLevel.EXECUTE_RISKY)
 
 
-def test_default_hooks_include_configured_rate_limit() -> None:
-    hooks = build_default_hooks(AgentConfig(max_consecutive_tool_calls=5))
+def test_default_hooks_include_observability_hooks() -> None:
+    hooks = build_default_hooks(AgentConfig())
 
     assert isinstance(hooks[0], PermissionHook)
     assert isinstance(hooks[1], ConsoleProgressHook)
-    assert isinstance(hooks[2], RateLimitHook)
-    assert hooks[2].max_consecutive_calls == 5
-    assert isinstance(hooks[3], LLMMetricsHook)
-    assert isinstance(hooks[4], AuditHook)
+    assert isinstance(hooks[2], LLMMetricsHook)
+    assert isinstance(hooks[3], AuditHook)
 
 
 def test_audit_hook_can_be_disabled() -> None:
@@ -98,5 +95,5 @@ def test_console_progress_hook_can_be_disabled() -> None:
 
     assert not any(isinstance(hook, ConsoleProgressHook) for hook in hooks)
     assert isinstance(hooks[0], PermissionHook)
-    assert isinstance(hooks[1], RateLimitHook)
-    assert isinstance(hooks[2], LLMMetricsHook)
+    assert isinstance(hooks[1], LLMMetricsHook)
+    assert isinstance(hooks[2], AuditHook)

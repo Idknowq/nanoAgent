@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from nano_agent.config import AgentConfig
-from nano_agent.context.snapshot import RunContextBuilder, RunContextSnapshot
+from nano_agent.context.state import CompactionStateBuilder
 from nano_agent.hooks.skill_activation import SkillActivationHook
 from nano_agent.loop import AgentLoop
 from nano_agent.memory.store import JsonlMemoryStore, MemoryRecord
@@ -78,7 +78,6 @@ def test_prompt_assembler_keeps_stable_core_and_exposes_only_skill_metadata(
     request = PromptRequest(
         user_request="Fix the failing tests.",
         repo_url="https://example.com/repo.git",
-        context=RunContextSnapshot(repo_url="https://example.com/repo.git", max_steps=20),
         available_skills=metadata,
     )
 
@@ -88,7 +87,8 @@ def test_prompt_assembler_keeps_stable_core_and_exposes_only_skill_metadata(
 
     assert first.messages[0].role == "system"
     assert first.core_sha256 == second.core_sha256
-    assert first.included_sections == ["core", "skill_catalog", "context", "task"]
+    assert first.included_sections == ["core", "skill_catalog", "task"]
+    assert all("<runtime_context>" not in message.content for message in first.messages)
     assert first.available_skill_names == ["python-repository"]
     assert "Diagnose Python failures." in catalog.content
     assert body not in "\n".join(message.content for message in first.messages)
@@ -108,7 +108,6 @@ def test_prompt_assembler_selectively_injects_memory(tmp_path: Path) -> None:
         PromptRequest(
             user_request="Inspect.",
             repo_url="https://example.com/repo.git",
-            context=RunContextSnapshot(repo_url="https://example.com/repo.git"),
             memories=store.search("repo", tags={"repo"}),
         )
     )
@@ -178,7 +177,6 @@ def test_activate_skill_loads_body_for_next_llm_call_and_persists_record(
         PromptRequest(
             user_request="Fix tests.",
             repo_url=context.repo_url,
-            context=RunContextSnapshot(repo_url=context.repo_url, max_steps=3),
             available_skills=registry.list_metadata(),
         )
     ).messages
@@ -229,7 +227,7 @@ def test_activate_skill_does_not_inject_body_twice(tmp_path: Path) -> None:
     assert second_hook is None
 
 
-def test_context_builder_extracts_bounded_tool_evidence(tmp_path: Path) -> None:
+def test_compaction_state_builder_extracts_bounded_tool_evidence(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     (workspace / ".git").mkdir(parents=True)
     messages = [
@@ -247,14 +245,13 @@ def test_context_builder_extracts_bounded_tool_evidence(tmp_path: Path) -> None:
         ),
     ]
 
-    snapshot = RunContextBuilder().build(
+    state = CompactionStateBuilder().build(
         repo_url="https://example.com/repo.git",
         workspace_path=workspace,
-        current_step=2,
-        max_steps=20,
         messages=messages,
     )
 
-    assert snapshot.workspace_state == "ready"
-    assert snapshot.inspected_files == ["README.md"]
-    assert snapshot.failures == []
+    assert state.workspace_state == "ready"
+    assert state.inspected_files == ["README.md"]
+    assert state.failures == []
+    assert "<compaction_state>" in state.to_prompt()
