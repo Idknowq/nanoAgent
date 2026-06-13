@@ -285,7 +285,7 @@ class Tool:
 任务状态示例：
 
 ```text
-pending -> running -> waiting_approval -> running -> succeeded
+pending -> running -> waiting_approval -> running -> completed
 pending -> running -> failed
 ```
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, Field
 
@@ -14,8 +14,16 @@ class RunStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     WAITING_APPROVAL = "waiting_approval"
-    SUCCEEDED = "succeeded"
+    COMPLETED = "completed"
+    BLOCKED = "blocked"
     FAILED = "failed"
+
+
+TerminalRunStatus: TypeAlias = Literal[
+    RunStatus.COMPLETED,
+    RunStatus.BLOCKED,
+    RunStatus.FAILED,
+]
 
 
 class ApprovalLevel(StrEnum):
@@ -32,6 +40,7 @@ class ApprovalLevel(StrEnum):
 class ToolCallRecord(BaseModel):
     """一次工具调用的结构化记录，用于审计和上下文压缩。"""
 
+    tool_call_id: str  # LLM 为本次工具调用生成的唯一标识。
     tool_name: str  # 被调用的工具名称，例如 run_command、read_file。
     input_summary: str  # 工具输入摘要，避免保存过大的原始输入。
     output_summary: str  # 工具输出摘要，用于复盘 Agent 判断依据。
@@ -80,6 +89,19 @@ class LLMResponse(BaseModel):
     usage: LLMUsage | None = None  # provider 返回的 token 使用量。
 
 
+class CompletionReport(BaseModel):
+    """User-facing completion data used to render report.md."""
+
+    status: TerminalRunStatus  # 最终状态：完成、阻塞或失败。
+    problem: str  # 发现的问题或任务目标概述。
+    root_cause: str  # 问题根因；无法确定时说明当前判断。
+    resolution: str  # 已实施的修复或采取的处理方式。
+    changed_files: list[str] = Field(default_factory=list)  # 实际修改的仓库相对路径。
+    verification_summary: str = ""  # 验证命令、范围和结果摘要。
+    remaining_risks: list[str] = Field(default_factory=list)  # 尚未消除的风险。
+    blockers: list[str] = Field(default_factory=list)  # 阻塞任务继续完成的原因。
+
+
 class RunSummary(BaseModel):
     """一次 Agent 运行的最终摘要和中间产物索引。"""
 
@@ -95,5 +117,6 @@ class RunSummary(BaseModel):
     llm_call_count: int = 0  # 本次运行发起的 LLM 调用次数。
     tool_calls: list[ToolCallRecord] = Field(default_factory=list)  # 工具调用审计记录。
     messages: list[AgentMessage] = Field(default_factory=list)  # Agent 循环中的消息历史。
+    completion_report: CompletionReport | None = None  # 通过终止协议确认的最终报告。
     notes: list[str] = Field(default_factory=list)  # 面向用户或开发者的补充说明。
     artifacts: dict[str, Any] = Field(default_factory=dict)  # 结构化中间产物。

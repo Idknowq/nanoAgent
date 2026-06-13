@@ -7,10 +7,17 @@ from datetime import datetime, timezone
 from nano_agent.config import AgentConfig
 from nano_agent.context.compactor import ContextCompactor, is_prompt_too_long_error
 from nano_agent.hooks.base import AgentHook, HookResult
-from nano_agent.models import AgentMessage, RunStatus, RunSummary, ToolCallRecord
+from nano_agent.models import (
+    AgentMessage,
+    CompletionReport,
+    RunStatus,
+    RunSummary,
+    ToolCallRecord,
+)
 from nano_agent.persistence.message_store import MessageStore
 from nano_agent.services.llm import LLMClient
 from nano_agent.tools.base import ToolContext, ToolRegistry, ToolResult
+from nano_agent.tools.finish_run import FinishRunTool
 
 
 class AgentLoop:
@@ -39,6 +46,7 @@ class AgentLoop:
         run.messages = messages
         if self.message_store is not None:
             self.message_store.append_many(messages)
+        invalid_end_turns = 0
 
         for step_index in range(self.config.max_steps):
             self.context.current_step = step_index + 1
@@ -103,10 +111,38 @@ class AgentLoop:
 
             if response.stop_reason == "end_turn":
                 self._append_messages(messages, deferred_hook_messages)
-                run.status = RunStatus.SUCCEEDED
+                if not self.tools.contains(FinishRunTool.name):
+                    run.status = RunStatus.COMPLETED
+                    run.messages = messages
+                    return run
+                invalid_end_turns += 1
+                if invalid_end_turns == 1:
+                    self._append_messages(
+                        messages,
+                        [
+                            AgentMessage(
+                                role="system",
+                                content=(
+                                    "The run is not finished. Submit exactly one finish_run "
+                                    "tool call with a structured completed, blocked, or failed "
+                                    "report. Plain end_turn does not determine run status."
+                                ),
+                            )
+                        ],
+                    )
+                    run.messages = messages
+                    continue
+                run.status = RunStatus.FAILED
+                run.completion_report = self._protocol_failure_report(
+                    "The model ended twice without a valid finish_run tool call."
+                )
                 run.messages = messages
                 return run
 
+            finish_is_exclusive = (
+                len(response.tool_uses) == 1
+                and response.tool_uses[0].name == FinishRunTool.name
+            )
             for tool_use in response.tool_uses:
                 try:
                     tool = self.tools.get(tool_use.name)
@@ -117,6 +153,7 @@ class AgentLoop:
                     )
                     run.tool_calls.append(
                         ToolCallRecord(
+                            tool_call_id=tool_use.id,
                             tool_name=tool_use.name,
                             input_summary=json.dumps(tool_use.input, ensure_ascii=False),
                             output_summary=result.summary,
@@ -139,6 +176,7 @@ class AgentLoop:
                     )
                     continue
                 started = time.monotonic()
+                completion_report: CompletionReport | None = None
                 try:
                     for hook in self.hooks:
                         self._append_hook_messages(
@@ -146,6 +184,11 @@ class AgentLoop:
                             hook.before_tool_call(self.context, tool, tool_use),
                         )
                     result = tool.invoke(tool_use.input, self.context)
+                    if isinstance(tool, FinishRunTool) and result.success:
+                        result, completion_report = self._validate_completion(
+                            result,
+                            finish_is_exclusive=finish_is_exclusive,
+                        )
                     duration = time.monotonic() - started
                     for hook in self.hooks:
                         self._append_hook_messages(
@@ -164,6 +207,7 @@ class AgentLoop:
                     raise
                 run.tool_calls.append(
                     ToolCallRecord(
+                        tool_call_id=tool_use.id,
                         tool_name=tool.name,
                         input_summary=json.dumps(tool_use.input, ensure_ascii=False),
                         output_summary=result.summary,
@@ -182,14 +226,55 @@ class AgentLoop:
                         )
                     ],
                 )
+                if completion_report is not None:
+                    self._append_messages(messages, deferred_hook_messages)
+                    run.completion_report = completion_report
+                    run.status = completion_report.status
+                    run.messages = messages
+                    return run
 
             self._append_messages(messages, deferred_hook_messages)
             run.messages = messages
 
         run.status = RunStatus.FAILED
         run.notes.append(f"Agent loop exceeded max_steps={self.config.max_steps}")
+        run.completion_report = self._protocol_failure_report(
+            f"Agent loop exceeded max_steps={self.config.max_steps} without a valid finish_run."
+        )
         run.messages = messages
         return run
+
+    def _validate_completion(
+        self,
+        result: ToolResult,
+        *,
+        finish_is_exclusive: bool,
+    ) -> tuple[ToolResult, CompletionReport | None]:
+        report = CompletionReport.model_validate(result.data["completion_report"])
+        if not finish_is_exclusive:
+            return (
+                ToolResult.failure(
+                    code="invalid_completion",
+                    message="finish_run must be the only tool call in the LLM response",
+                    data={
+                        "validation_errors": [
+                            "finish_run must be the only tool call in the LLM response"
+                        ]
+                    },
+                ),
+                None,
+            )
+        return result, report
+
+    @staticmethod
+    def _protocol_failure_report(reason: str) -> CompletionReport:
+        return CompletionReport(
+            status=RunStatus.FAILED,
+            problem="The agent did not submit a valid final result.",
+            root_cause="The finish_run termination protocol was not completed.",
+            resolution=reason,
+            remaining_risks=["Repository work may be incomplete or unverified."],
+        )
 
     def _append_hook_messages(
         self,

@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 import typer
 from dotenv import load_dotenv
 from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
 
 from nano_agent.agent import NanoAgent
 from nano_agent.config import AgentConfig
@@ -62,5 +64,26 @@ def run(
     agent = NanoAgent(config=config)
     result = agent.run(repo_url=repo_url)
 
-    console.print("\n[bold]Run summary[/bold]")
-    console.print_json(result.model_dump_json(indent=2))
+    successful_tools = sum(call.success for call in result.tool_calls)
+    failed_tools = len(result.tool_calls) - successful_tools
+    duration = (
+        max(0.0, (result.finished_at - result.started_at).total_seconds())
+        if result.finished_at is not None
+        else 0.0
+    )
+    status = result.status.value
+    status_style = {
+        "completed": "bold green",
+        "blocked": "bold yellow",
+        "failed": "bold red",
+    }.get(status, "bold")
+    content = Text()
+    content.append("Status      ")
+    content.append(status, style=status_style)
+    content.append(f"\nSteps       {result.steps}")
+    content.append(f"\nLLM calls   {result.llm_call_count}")
+    content.append(f"\nTools       {successful_tools} succeeded / {failed_tools} failed")
+    content.append(f"\nDuration    {duration:.2f}s")
+    content.append(f"\nReport      {config.runs_root / result.run_id / 'report.md'}", style="cyan")
+    console.print()
+    console.print(Panel(content, title="nanoAgent", border_style=status_style))

@@ -147,6 +147,9 @@ class ToolRegistry:
             raise KeyError(f"Tool not found: {name}")
         return self._tools[name]
 
+    def contains(self, name: str) -> bool:
+        return name in self._tools
+
     def specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(
@@ -181,6 +184,7 @@ def _import_builtin_tools() -> None:
     """导入内置工具模块，触发模块级工具工厂注册。"""
     import nano_agent.tools.clone_repo  # noqa: F401
     import nano_agent.tools.edit_file  # noqa: F401
+    import nano_agent.tools.finish_run  # noqa: F401
     import nano_agent.tools.list_files  # noqa: F401
     import nano_agent.tools.read_file  # noqa: F401
     import nano_agent.tools.run_command  # noqa: F401

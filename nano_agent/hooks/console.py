@@ -5,6 +5,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field
 from rich.console import Console
+from rich.text import Text
 
 from nano_agent.hooks.base import HookResult, NoOpHook
 from nano_agent.models import LLMResponse, ToolUseRequest
@@ -20,14 +21,22 @@ class ConsoleEventType(StrEnum):
 
 
 class ConsoleEvent(BaseModel):
-    type: ConsoleEventType
-    run_id: str
-    step: int
-    max_steps: int
-    message: str
-    tool_name: str | None = None
-    success: bool | None = None
-    duration_seconds: float | None = None
+    type: ConsoleEventType  # 生命周期事件类型。
+    run_id: str  # 当前 Agent run 标识。
+    step: int  # 当前主循环步骤。
+    max_steps: int  # 主循环最大步骤数。
+    tool_name: str | None = None  # 工具事件对应的工具名。
+    tool_input_summary: str | None = None  # 工具关键输入的紧凑摘要。
+    result_summary: str | None = None  # 工具结果或错误摘要。
+    success: bool | None = None  # 工具或 LLM 调用是否成功。
+    duration_seconds: float | None = None  # 调用耗时。
+    provider: str | None = None  # LLM provider。
+    model: str | None = None  # LLM 模型名。
+    stop_reason: str | None = None  # LLM 停止原因。
+    requested_tool_count: int = 0  # LLM 请求的工具数量。
+    input_tokens: int | None = None  # LLM 输入 token 数。
+    output_tokens: int | None = None  # LLM 输出 token 数。
+    cached_tokens: int | None = None  # LLM 缓存命中 token 数。
 
 
 class ConsoleSection(BaseModel):
@@ -63,13 +72,59 @@ class RichConsoleRenderer:
         self.console = console or Console()
 
     def render_event(self, event: ConsoleEvent) -> None:
-        self.console.print(event.message, markup=False)
+        if event.type == ConsoleEventType.LLM_STARTED:
+            self.console.print(
+                Text(f"● LLM {event.step}/{event.max_steps} request", style="bold cyan")
+            )
+            return
+        if event.type == ConsoleEventType.LLM_COMPLETED:
+            self.console.print(self._llm_completed(event))
+            return
+        if event.type == ConsoleEventType.TOOL_STARTED:
+            detail = f"  {event.tool_input_summary}" if event.tool_input_summary else ""
+            self.console.print(
+                Text(f"→ {event.tool_name}{detail}", style="bold blue")
+            )
+            return
+        if event.type == ConsoleEventType.TOOL_COMPLETED:
+            marker = "✓" if event.success else "✗"
+            style = "green" if event.success else "bold red"
+            duration = f"  {event.duration_seconds:.2f}s" if event.duration_seconds is not None else ""
+            detail = f"  {event.result_summary}" if event.result_summary else ""
+            self.console.print(
+                Text(f"{marker} {event.tool_name}{duration}{detail}", style=style)
+            )
+            return
+        self.console.print(
+            Text(f"✗ {event.result_summary or 'Unknown error'}", style="bold red")
+        )
 
     def render_sections(self, sections: list[ConsoleSection]) -> None:
         for section in sections:
-            self.console.print(section.title, markup=False)
+            self.console.print(Text(section.title, style="bold"))
             for line in section.lines:
-                self.console.print(f"  {line}", markup=False)
+                self.console.print(Text(f"  {line}", style="dim"))
+
+    @staticmethod
+    def _llm_completed(event: ConsoleEvent) -> Text:
+        model = event.model or event.provider or "unknown-model"
+        duration = f"{event.duration_seconds:.2f}s" if event.duration_seconds is not None else "-"
+        parts = [f"✓ LLM {event.step}/{event.max_steps}", model, duration]
+        if event.input_tokens is not None:
+            token_detail = f"in {RichConsoleRenderer._format_tokens(event.input_tokens)}"
+            if event.output_tokens is not None:
+                token_detail += (
+                    f" · out {RichConsoleRenderer._format_tokens(event.output_tokens)}"
+                )
+            if event.cached_tokens is not None and event.input_tokens > 0:
+                token_detail += f" · cache {event.cached_tokens / event.input_tokens:.0%}"
+            parts.append(token_detail)
+        parts.append(
+            f"{event.requested_tool_count} tool(s)"
+            if event.requested_tool_count
+            else str(event.stop_reason or "end_turn")
+        )
+        return Text("  ".join(parts), style="cyan")
 
 
 class ConsoleProgressHook(NoOpHook):
@@ -92,7 +147,6 @@ class ConsoleProgressHook(NoOpHook):
         self._render_event(
             context,
             ConsoleEventType.LLM_STARTED,
-            f"[{context.current_step}/{context.max_steps}] LLM request",
         )
         return None
 
@@ -101,15 +155,18 @@ class ConsoleProgressHook(NoOpHook):
         context: ToolContext,
         response: LLMResponse,
     ) -> HookResult | None:
-        if response.stop_reason == "tool_use":
-            tool_names = ", ".join(tool_use.name for tool_use in response.tool_uses)
-            detail = f"tool_use -> {tool_names or 'no tools'}"
-        else:
-            detail = "end_turn"
+        usage = response.usage
         self._render_event(
             context,
             ConsoleEventType.LLM_COMPLETED,
-            f"[{context.current_step}/{context.max_steps}] LLM response | {detail}",
+            provider=response.provider or context.config.llm_provider,
+            model=response.model or context.config.llm_model,
+            stop_reason=response.stop_reason,
+            requested_tool_count=len(response.tool_uses),
+            input_tokens=usage.input_tokens if usage else None,
+            output_tokens=usage.output_tokens if usage else None,
+            cached_tokens=usage.cached_tokens if usage else None,
+            duration_seconds=context.current_llm_duration_seconds,
         )
         return None
 
@@ -122,8 +179,8 @@ class ConsoleProgressHook(NoOpHook):
         self._render_event(
             context,
             ConsoleEventType.TOOL_STARTED,
-            f"[{context.current_step}/{context.max_steps}] Tool {tool.name} | running",
             tool_name=tool.name,
+            tool_input_summary=self._tool_input_summary(tool_use),
         )
         return None
 
@@ -135,18 +192,13 @@ class ConsoleProgressHook(NoOpHook):
         result: ToolResult,
         duration_seconds: float,
     ) -> HookResult | None:
-        status = "succeeded" if result.success else "failed"
-        error_detail = f" | {result.error_code}" if result.error_code else ""
         self._render_event(
             context,
             ConsoleEventType.TOOL_COMPLETED,
-            (
-                f"[{context.current_step}/{context.max_steps}] Tool {tool.name} | "
-                f"{status}{error_detail} | {duration_seconds:.2f}s"
-            ),
             tool_name=tool.name,
             success=result.success,
             duration_seconds=duration_seconds,
+            result_summary=(result.error_message or result.summary)[:200],
         )
         self._render_sections(context, tool=tool, tool_use=tool_use, result=result)
         return None
@@ -155,10 +207,7 @@ class ConsoleProgressHook(NoOpHook):
         self._render_event(
             context,
             ConsoleEventType.ERROR,
-            (
-                f"[{context.current_step}/{context.max_steps}] Error | "
-                f"{type(error).__name__}: {error}"
-            ),
+            result_summary=f"{type(error).__name__}: {error}",
         )
         return None
 
@@ -166,26 +215,63 @@ class ConsoleProgressHook(NoOpHook):
         self,
         context: ToolContext,
         event_type: ConsoleEventType,
-        message: str,
         *,
         tool_name: str | None = None,
+        tool_input_summary: str | None = None,
+        result_summary: str | None = None,
         success: bool | None = None,
         duration_seconds: float | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        stop_reason: str | None = None,
+        requested_tool_count: int = 0,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cached_tokens: int | None = None,
     ) -> None:
         event = ConsoleEvent(
             type=event_type,
             run_id=context.run_id,
             step=context.current_step,
             max_steps=context.max_steps,
-            message=message,
             tool_name=tool_name,
+            tool_input_summary=tool_input_summary,
+            result_summary=result_summary,
             success=success,
             duration_seconds=duration_seconds,
+            provider=provider,
+            model=model,
+            stop_reason=stop_reason,
+            requested_tool_count=requested_tool_count,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_tokens=cached_tokens,
         )
         try:
             self.renderer.render_event(event)
         except Exception as exc:  # noqa: BLE001 - console failures must not stop the Agent.
             self._render_errors.append(str(exc))
+
+    @staticmethod
+    def _tool_input_summary(tool_use: ToolUseRequest) -> str:
+        input_data = tool_use.input
+        if tool_use.name in {"read_file", "edit_file", "list_files"}:
+            return str(input_data.get("path", "."))
+        if tool_use.name == "run_command":
+            program = str(input_data.get("program", ""))
+            args = " ".join(str(value) for value in input_data.get("args", []))
+            return f"{program} {args}".strip()[:160]
+        if tool_use.name == "activate_skill":
+            return str(input_data.get("name", ""))
+        if tool_use.name == "finish_run":
+            return str(input_data.get("status", ""))
+        return ""
+
+    @staticmethod
+    def _format_tokens(value: int) -> str:
+        if value < 1_000:
+            return str(value)
+        return f"{value / 1_000:.1f}k"
 
     def _render_sections(
         self,

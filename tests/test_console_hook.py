@@ -14,7 +14,7 @@ from nano_agent.hooks.console import (
 )
 from nano_agent.hooks.permission import PermissionDeniedError, PermissionHook, PermissionPolicy
 from nano_agent.loop import AgentLoop
-from nano_agent.models import AgentMessage, LLMResponse, RunSummary, ToolUseRequest
+from nano_agent.models import AgentMessage, LLMResponse, LLMUsage, RunSummary, ToolUseRequest
 from nano_agent.tools.base import ToolContext, ToolRegistry, ToolResult
 from nano_agent.tools.run_command import RunCommandTool
 from nano_agent.tools.todo import TodoWriteTool
@@ -81,6 +81,9 @@ def test_console_hook_renders_llm_lifecycle(tmp_path: Path) -> None:
         context,
         LLMResponse(
             stop_reason="tool_use",
+            provider="test",
+            model="test-model",
+            usage=LLMUsage(input_tokens=100, output_tokens=20, cached_tokens=50),
             tool_uses=[ToolUseRequest(id="call-1", name="read_file")],
         ),
     )
@@ -91,9 +94,12 @@ def test_console_hook_renders_llm_lifecycle(tmp_path: Path) -> None:
         ConsoleEventType.LLM_COMPLETED,
         ConsoleEventType.LLM_COMPLETED,
     ]
-    assert renderer.events[0].message == "[2/20] LLM request"
-    assert renderer.events[1].message == "[2/20] LLM response | tool_use -> read_file"
-    assert renderer.events[2].message == "[2/20] LLM response | end_turn"
+    assert renderer.events[0].step == 2
+    assert renderer.events[1].model == "test-model"
+    assert renderer.events[1].requested_tool_count == 1
+    assert renderer.events[1].input_tokens == 100
+    assert renderer.events[1].cached_tokens == 50
+    assert renderer.events[2].stop_reason == "end_turn"
 
 
 def test_console_hook_renders_tool_success_failure_and_sections(tmp_path: Path) -> None:
@@ -123,12 +129,11 @@ def test_console_hook_renders_tool_success_failure_and_sections(tmp_path: Path) 
     )
 
     assert renderer.events[0].type == ConsoleEventType.TOOL_STARTED
-    assert renderer.events[0].message == "[2/20] Tool todo_write | running"
-    assert renderer.events[1].message == "[2/20] Tool todo_write | succeeded | 0.12s"
+    assert renderer.events[0].tool_name == "todo_write"
+    assert renderer.events[1].result_summary == "ok"
+    assert renderer.events[1].duration_seconds == 0.125
     assert renderer.events[1].success
-    assert renderer.events[2].message == (
-        "[2/20] Tool todo_write | failed | invalid_input | 0.01s"
-    )
+    assert renderer.events[2].result_summary == "bad input"
     assert not renderer.events[2].success
     assert [section.key for section in renderer.sections] == ["todo", "todo"]
 
@@ -140,7 +145,7 @@ def test_console_hook_renders_errors(tmp_path: Path) -> None:
     hook.on_error(make_context(tmp_path), RuntimeError("broken"))
 
     assert renderer.events[0].type == ConsoleEventType.ERROR
-    assert renderer.events[0].message == "[2/20] Error | RuntimeError: broken"
+    assert renderer.events[0].result_summary == "RuntimeError: broken"
 
 
 def test_console_hook_isolates_renderer_errors(tmp_path: Path) -> None:
@@ -177,7 +182,6 @@ def test_rich_console_renderer_outputs_events_and_sections() -> None:
         run_id="run-1",
         step=1,
         max_steps=20,
-        message="[1/20] LLM request",
     )
 
     renderer.render_event(event)
@@ -186,7 +190,7 @@ def test_rich_console_renderer_outputs_events_and_sections() -> None:
     )
 
     assert output.getvalue().splitlines() == [
-        "[1/20] LLM request",
+        "● LLM 1/20 request",
         "Run",
         "  step: 1/20",
         "  status: running",
@@ -218,4 +222,4 @@ def test_permission_rejection_renders_error_without_tool_running(tmp_path: Path)
         ConsoleEventType.ERROR,
     ]
     assert ConsoleEventType.TOOL_STARTED not in event_types
-    assert "PermissionDeniedError" in renderer.events[-1].message
+    assert "PermissionDeniedError" in str(renderer.events[-1].result_summary)

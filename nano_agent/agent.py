@@ -9,10 +9,11 @@ from nano_agent.hooks.registry import build_default_hooks
 from nano_agent.hooks.skill_activation import SkillActivationHook
 from nano_agent.loop import AgentLoop
 from nano_agent.memory.store import JsonlMemoryStore, MemoryRecord
-from nano_agent.models import RunStatus, RunSummary
+from nano_agent.models import CompletionReport, RunStatus, RunSummary
 from nano_agent.persistence.config_store import ConfigStore
 from nano_agent.persistence.message_store import MessageStore
 from nano_agent.persistence.prompt_store import PromptStore
+from nano_agent.persistence.report_store import ReportStore
 from nano_agent.persistence.skill_activation_store import SkillActivationStore
 from nano_agent.prompts.assembler import PromptAssembler, PromptRequest
 from nano_agent.services.llm import LLMClient
@@ -36,8 +37,9 @@ class NanoAgent:
         self.workspace_manager = WorkspaceManager(config=config)  # 管理工作区、clone 和运行记录。
         self.llm = llm  # 保存可替换的 LLM 客户端；为空时按配置创建真实模型客户端。
         self.prompt_assembler = PromptAssembler()  # 组装初始 system/user 消息。
-        self.config_store = ConfigStore()
+        self.config_store = ConfigStore()  # 配置信息持久化
         self.prompt_store = PromptStore()  # 持久化本次 prompt 的组装元数据。
+        self.report_store = ReportStore()  # 渲染并保存最终 Markdown 报告。
 
     def run(self, repo_url: str) -> RunSummary:
         run = self.workspace_manager.create_run(repo_url=repo_url)
@@ -52,6 +54,7 @@ class NanoAgent:
                 "summary": "summary.json",
                 "messages": "messages.jsonl",
                 "prompt": "prompt.json",
+                "report": "report.md",
             }
             if self.config.context_compaction_enabled:
                 run.artifacts["context_checkpoint"] = "context_checkpoint.json"
@@ -116,8 +119,29 @@ class NanoAgent:
         except Exception as exc:  # noqa: BLE001 - top-level agent boundary should capture failures.
             run.status = RunStatus.FAILED
             run.notes.append(f"Agent failed: {exc}")
+            run.completion_report = CompletionReport(
+                status=RunStatus.FAILED,
+                problem="The agent run terminated with an exception.",
+                root_cause=f"{type(exc).__name__}: {exc}",
+                resolution="The run stopped before a valid completion report was submitted.",
+                remaining_risks=["Repository work may be incomplete or unverified."],
+            )
 
         run.finished_at = datetime.now(timezone.utc)
+        if run.completion_report is None:
+            run.completion_report = CompletionReport(
+                status=RunStatus.FAILED,
+                problem="The agent run ended without a completion report.",
+                root_cause="No validated finish_run payload was available.",
+                resolution="Review messages.jsonl and rerun the task.",
+                remaining_risks=["No reliable completion status is available."],
+            )
+            run.status = RunStatus.FAILED
+        self.report_store.save(
+            self.workspace_manager.run_dir(run.run_id),
+            run,
+            run.completion_report,
+        )
         self.workspace_manager.save_run_summary(run)
         return run
 

@@ -123,7 +123,7 @@ def test_agent_loop_executes_tool_and_records_result(tmp_path: Path, capsys) -> 
 
     result = loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
 
-    assert result.status == "succeeded"
+    assert result.status == "completed"
     assert result.tool_calls[0].tool_name == "run_command"
     assert result.tool_calls[0].success
     assert any(message.role == "tool" for message in result.messages)
@@ -170,7 +170,7 @@ def test_agent_loop_retries_once_after_reactive_compaction(tmp_path: Path) -> No
         initial,
     )
 
-    assert result.status == "succeeded"
+    assert result.status == "completed"
     assert result.llm_call_count == 2
     assert llm.calls == 2
     assert llm.request_sizes[1] < llm.request_sizes[0]
@@ -283,6 +283,7 @@ def test_default_tool_registry_exposes_metadata(tmp_path: Path) -> None:
     assert command.category == "execution"
     assert command.requires_workspace
     assert command.is_mutating
+    assert any(spec.name == "finish_run" for spec in specs)
     assert all(spec.name != "bash" for spec in specs)
 
 
@@ -332,7 +333,7 @@ def test_permission_hook_allows_command_when_enabled(tmp_path: Path) -> None:
 
     result = loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
 
-    assert result.status == "succeeded"
+    assert result.status == "completed"
 
 
 def test_todo_write_is_optional_tool() -> None:
@@ -374,7 +375,7 @@ def test_agent_loop_returns_invalid_tool_input_to_llm(tmp_path: Path) -> None:
         [AgentMessage(role="user", content="start")],
     )
 
-    assert result.status == "succeeded"
+    assert result.status == "completed"
     assert not result.tool_calls[0].success
     assert '"error_code": "invalid_input"' in result.messages[-2].content
 
@@ -401,6 +402,6 @@ def test_agent_loop_returns_unknown_tool_to_llm(tmp_path: Path) -> None:
         [AgentMessage(role="user", content="start")],
     )
 
-    assert result.status == "succeeded"
+    assert result.status == "completed"
     assert result.tool_calls[0].tool_name == "missing_tool"
     assert '"error_code": "tool_not_found"' in result.messages[-2].content

@@ -183,7 +183,7 @@ def test_activate_skill_loads_body_for_next_llm_call_and_persists_record(
 
     result = loop.run(RunSummary(run_id="run-1", repo_url=context.repo_url), initial)
 
-    assert result.status == "succeeded"
+    assert result.status == "completed"
     assert any(body in message.content for message in llm.second_call_messages)
     tool_message = next(message for message in result.messages if message.role == "tool")
     assert body not in tool_message.content

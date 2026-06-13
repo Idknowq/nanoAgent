@@ -50,6 +50,22 @@ class ScriptedMvpLLMClient:
             )
 
         return LLMResponse(
-            content="end_turn: repository clone and initial inspection tool calls completed.",
-            stop_reason="end_turn",
+            content="I will submit the structured result.",
+            stop_reason="tool_use",
+            tool_uses=[
+                ToolUseRequest(
+                    id="toolu_finish",
+                    name="finish_run",
+                    input={
+                        "status": "completed",
+                        "problem": "Clone and initial repository inspection were requested.",
+                        "root_cause": "No deeper diagnosis was included in the scripted MVP flow.",
+                        "resolution": "Cloned the repository and listed its key files.",
+                        "verification_summary": "list_files completed successfully.",
+                        "remaining_risks": [
+                            "The scripted client does not diagnose or repair repository defects."
+                        ],
+                    },
+                )
+            ],
         )

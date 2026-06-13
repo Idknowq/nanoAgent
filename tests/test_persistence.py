@@ -29,10 +29,23 @@ class TodoThenFinishLLM:
                 ],
             )
         return LLMResponse(
-            content="done",
-            stop_reason="end_turn",
+            content="submit report",
+            stop_reason="tool_use",
             provider="test",
             model="test-model",
+            tool_uses=[
+                ToolUseRequest(
+                    id="finish-1",
+                    name="finish_run",
+                    input={
+                        "status": "completed",
+                        "problem": "Repository inspection was requested.",
+                        "root_cause": "No defect was required for this persistence test.",
+                        "resolution": "Recorded and verified the test todo.",
+                        "verification_summary": "todo_write completed successfully.",
+                    },
+                )
+            ],
         )
 
 
@@ -85,7 +98,7 @@ def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path)
     )
 
     run_dir = config.runs_root / result.run_id
-    assert result.status == "succeeded"
+    assert result.status == "completed"
     assert {path.name for path in run_dir.iterdir()} == {
         "audit.jsonl",
         "config.json",
@@ -93,6 +106,7 @@ def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path)
         "llm_calls.jsonl",
         "messages.jsonl",
         "prompt.json",
+        "report.md",
         "summary.json",
     }
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
@@ -101,7 +115,9 @@ def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path)
         (run_dir / "llm_calls.jsonl").read_text(encoding="utf-8").splitlines()[0]
     )
     assert summary["llm_call_count"] == 2
-    assert summary["tool_call_count"] == 1
+    assert summary["tool_call_count"] == 2
+    assert summary["status"] == "completed"
+    assert "outcome" not in summary
     assert "messages" not in summary
     assert audit["llm_call_id"] == llm_call["llm_call_id"] == "llm-1"
     prompt = json.loads((run_dir / "prompt.json").read_text(encoding="utf-8"))
@@ -112,6 +128,10 @@ def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path)
         "node-repository",
         "python-repository",
     ]
+    report = (run_dir / "report.md").read_text(encoding="utf-8")
+    assert "# nanoAgent Run Report" in report
+    assert "**Status:** completed" in report
+    assert "Repository inspection was requested." in report
 
 
 def test_disabled_context_compaction_omits_checkpoint_artifact(tmp_path: Path) -> None:

@@ -90,6 +90,20 @@ Before each main LLM request, `ContextCompactor` applies this ordered pipeline:
 append-only source of truth. `transcripts/`, `tool-results/`, and `compactions.jsonl` are
 created when their corresponding mechanisms run.
 
+## Completion protocol
+
+The model must finish through a single `finish_run` tool call. A plain `end_turn` receives
+one correction message; a second plain `end_turn` fails the run.
+
+The structured report declares `completed`, `blocked`, or `failed`. In the MVP, the runtime
+validates the report structure and requires `finish_run` to be the only tool call in its LLM
+response. Verification details and changed files are recorded from the model's report without
+additional evidence validation.
+
+Every run writes a uniform `report.md` containing the status, problem, root cause,
+resolution, changed files, verification summary, remaining risks, blockers, and run
+statistics. `summary.json` remains the machine-readable run index.
+
 ## Current limits
 
 - The model selects skills from metadata without semantic retrieval or ranking.
@@ -97,7 +111,4 @@ created when their corresponding mechanisms run.
 - Memory retrieval uses metadata filters rather than embeddings.
 - Token estimation uses a conservative character ratio rather than provider tokenizers.
 - Compact summaries use the same configured LLM client as the main Agent loop.
-- Prompt instructions define completion criteria, but the runtime still maps any model
-  `end_turn` response to a successful run. A later protocol revision should add explicit
-  completed, blocked, and failed outcomes.
 - Cache behavior depends on the configured OpenAI-compatible provider and model.
