@@ -27,6 +27,7 @@ def main() -> None:
 @app.command()
 def run(
     repo_url: Annotated[str, typer.Argument(help="Git repository URL to analyze.")],
+    user_request: Annotated[str, typer.Argument(help="Repository task to complete.")],
     workdir: Annotated[
         Path,
         typer.Option("--workdir", help="Directory for isolated agent workspaces."),
@@ -62,7 +63,7 @@ def run(
         llm_model=model,
     )
     agent = NanoAgent(config=config)
-    result = agent.run(repo_url=repo_url)
+    result = agent.run(repo_url=repo_url, user_request=user_request)
 
     successful_tools = sum(call.success for call in result.tool_calls)
     failed_tools = len(result.tool_calls) - successful_tools

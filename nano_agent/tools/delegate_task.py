@@ -21,8 +21,10 @@ class DelegateTaskTool(RuntimeTool):
 
     name = "delegate_task"  # 工具注册名称。
     description = (
-        "Run one scoped task in an isolated subagent and return its structured result. "
-        "Only explicitly supplied context is shared; the parent transcript is not copied."
+        "Delegate one bounded, independent, read-heavy investigation to an isolated subagent. "
+        "Use when examining several files or a separate subsystem would consume substantial "
+        "main-context space. Pass only necessary context and the narrowest useful tools. "
+        "The parent transcript is not copied and the subagent returns a bounded result."
     )  # 暴露给 LLM 的工具用途说明。
     approval_level = ApprovalLevel.READ  # 委派工具自身不直接修改工作区。
     category = "delegation"  # 工具所属的功能分类。

@@ -85,13 +85,13 @@ MVP 阶段建议：
 目标：
 
 ```bash
-nano-agent run https://github.com/example/repo
+nano-agent run https://github.com/example/repo "Inspect and repair verified defects."
 ```
 
 MVP 可支持参数：
 
 ```bash
-nano-agent run <repo_url> --workdir .nano/workspaces --max-steps 20
+nano-agent run <repo_url> "<user_request>" --workdir .nano/workspaces --max-steps 20
 ```
 
 输出内容：
@@ -512,7 +512,7 @@ CLI 更能突出 Agent 内部机制。等核心闭环稳定后，再考虑 Web d
 建议从以下最小任务开始：
 
 1. 初始化 Python 项目结构。
-2. 实现 `nano-agent run <repo_url>`。
+2. 实现 `nano-agent run <repo_url> <user_request>`。
 3. 实现 workspace clone。
 4. 实现 README 和文件树读取。
 5. 用规则识别 Python 项目。

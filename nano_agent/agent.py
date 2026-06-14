@@ -21,9 +21,12 @@ from nano_agent.services.registry import create_llm_client
 from nano_agent.skills.registry import SkillRegistry
 from nano_agent.skills.session import SkillSession
 from nano_agent.subagents.manager import SubagentManager
+from nano_agent.tasks.service import TaskService
+from nano_agent.tasks.store import TaskStore
 from nano_agent.tools.activate_skill import ActivateSkillTool
 from nano_agent.tools.base import ToolContext, build_default_tool_registry
 from nano_agent.tools.delegate_task import DelegateTaskTool
+from nano_agent.tools.tasks import TaskCreateTool, TaskGetTool, TaskListTool, TaskUpdateTool
 from nano_agent.workspace import WorkspaceManager
 
 
@@ -43,7 +46,7 @@ class NanoAgent:
         self.prompt_store = PromptStore()  # 持久化本次 prompt 的组装元数据。
         self.report_store = ReportStore()  # 渲染并保存最终 Markdown 报告。
 
-    def run(self, repo_url: str) -> RunSummary:
+    def run(self, repo_url: str, user_request: str) -> RunSummary:
         run = self.workspace_manager.create_run(repo_url=repo_url)
         run.status = RunStatus.RUNNING
 
@@ -57,6 +60,7 @@ class NanoAgent:
                 "messages": "messages.jsonl",
                 "prompt": "prompt.json",
                 "report": "report.md",
+                "tasks": "tasks/",
             }
             if self.config.context_compaction_enabled:
                 run.artifacts["context_checkpoint"] = "context_checkpoint.json"
@@ -85,6 +89,11 @@ class NanoAgent:
                     activation_store=SkillActivationStore(run_dir),
                 )
             )
+            task_service = TaskService(TaskStore(run_dir))
+            tools.register(TaskCreateTool(task_service))
+            tools.register(TaskGetTool(task_service))
+            tools.register(TaskListTool(task_service))
+            tools.register(TaskUpdateTool(task_service))
             hooks = [
                 SkillActivationHook(skill_session),
                 *build_default_hooks(self.config),
@@ -102,9 +111,7 @@ class NanoAgent:
                 )
             prompt_bundle = self.prompt_assembler.assemble(
                 PromptRequest(
-                    user_request=(
-                        "Analyze the repository, diagnose defects, and make verified repairs."
-                    ),
+                    user_request=user_request,
                     repo_url=repo_url,
                     available_skills=skill_registry.list_metadata(),
                     memories=self._load_memories(repo_url),

@@ -92,7 +92,12 @@ def test_prompt_assembler_keeps_stable_core_and_exposes_only_skill_metadata(
     assert first.available_skill_names == ["python-repository"]
     assert "Diagnose Python failures." in catalog.content
     assert body not in "\n".join(message.content for message in first.messages)
-    assert "Use `delegate_task` when a scoped investigation" in first.messages[0].content
+    assert "at least two independent durable" in first.messages[0].content
+    assert "Delegate a bounded, independent, read-heavy investigation" in (
+        first.messages[0].content
+    )
+    assert "use `list_files` instead of `ls` or `find`" in first.messages[0].content
+    assert 'Use `"."` for the workspace root' in first.messages[0].content
 
 
 def test_prompt_assembler_selectively_injects_memory(tmp_path: Path) -> None:

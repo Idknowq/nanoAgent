@@ -38,6 +38,12 @@ parent's tools. Child lifecycle and results are stored under
 synchronously and forbids recursive delegation; parallel scheduling and running-task
 cancellation are not implemented.
 
+The main Agent also has persistent `task_create`, `task_get`, `task_list`, and `task_update`
+tools. Tasks are stored under `.nano/runs/<run_id>/tasks/`, support validated lifecycle
+transitions and `blocked_by` dependencies, and automatically unblock dependency-blocked tasks
+when all prerequisites complete. This task state is distinct from the short-lived `todo_write`
+checklist. Task execution remains manual and synchronous in the current MVP.
+
 ## Setup
 
 ```bash
@@ -49,11 +55,13 @@ pip install -r requirements.txt
 ## CLI
 
 ```bash
-nano-agent run https://github.com/example/repo
+nano-agent run https://github.com/example/repo \
+  "Inspect the repository, repair verified defects, and run relevant tests."
 ```
 
 During early development, use:
 
 ```bash
-python -m nano_agent.cli run https://github.com/example/repo
+python -m nano_agent.cli run https://github.com/example/repo \
+  "Inspect the repository, repair verified defects, and run relevant tests."
 ```

@@ -32,6 +32,16 @@ def test_list_files_returns_stable_tree(tmp_path: Path) -> None:
     assert not result.data["truncated"]
 
 
+def test_list_files_normalizes_absolute_workspace_root(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("readme", encoding="utf-8")
+
+    result = ListFilesTool().invoke({"path": str(tmp_path)}, make_context(tmp_path))
+
+    assert result.success
+    assert result.data["root"] == "."
+    assert listed_paths(result) == ["README.md"]
+
+
 def test_list_files_respects_depth_limit(tmp_path: Path) -> None:
     (tmp_path / "src" / "nested").mkdir(parents=True)
     (tmp_path / "src" / "nested" / "app.py").touch()
@@ -82,9 +92,14 @@ def test_list_files_rejects_file_and_workspace_escape(tmp_path: Path) -> None:
 
     file_result = ListFilesTool().invoke({"path": "README.md"}, make_context(tmp_path))
     escape_result = ListFilesTool().invoke({"path": ".."}, make_context(tmp_path))
+    absolute_child_result = ListFilesTool().invoke(
+        {"path": str(tmp_path / "nested")},
+        make_context(tmp_path),
+    )
 
     assert file_result.error_code == "invalid_input"
     assert escape_result.error_code == "invalid_input"
+    assert absolute_child_result.error_code == "invalid_input"
 
 
 def test_list_files_rejects_invalid_limits(tmp_path: Path) -> None:

@@ -30,23 +30,29 @@ IGNORED_NAMES = {
 
 
 class ListFilesInput(ToolInput):
-    path: str = "."
-    max_depth: int = Field(default=2, ge=0, le=10)
-    max_entries: int = Field(default=500, ge=1, le=5000)
-    include_hidden: bool = False
+    path: str = Field(
+        default=".",
+        description="Workspace-relative directory path. Use '.' for the workspace root.",
+    )  # 需要列出的工作区相对目录。
+    max_depth: int = Field(default=2, ge=0, le=10)  # 递归列出的最大目录深度。
+    max_entries: int = Field(default=500, ge=1, le=5000)  # 最多返回的文件条目数。
+    include_hidden: bool = False  # 是否包含普通隐藏文件和目录。
 
 
 class FileEntry(BaseModel):
-    path: str
-    type: Literal["file", "directory", "symlink"]
-    size: int | None = None
+    path: str  # 文件或目录相对工作区的路径。
+    type: Literal["file", "directory", "symlink"]  # 当前条目的文件系统类型。
+    size: int | None = None  # 普通文件的字节数，目录和符号链接为空。
 
 
 class ListFilesTool(RuntimeTool):
     """List a bounded directory tree without following symlinks."""
 
     name = "list_files"
-    description = "List files and directories in the current agent workspace."
+    description = (
+        "List files and directories using a workspace-relative path. "
+        "Use path='.' for the workspace root instead of an absolute path."
+    )
     approval_level = ApprovalLevel.READ
     category = "filesystem"
     requires_workspace = True
@@ -54,17 +60,23 @@ class ListFilesTool(RuntimeTool):
     input_schema = ListFilesInput.model_json_schema()
 
     def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+        requested_path = input_data["path"]
+        supplied = Path(requested_path)
+        if supplied.is_absolute() and supplied.resolve(strict=False) == (
+            context.workspace_path.resolve(strict=False)
+        ):
+            requested_path = "."
         try:
             root = resolve_workspace_path(
                 context.workspace_path,
-                input_data["path"],
+                requested_path,
                 must_exist=True,
             )
         except (WorkspacePathError, FileNotFoundError) as exc:
             raise ToolInputError(str(exc)) from exc
 
         if not root.is_dir():
-            raise ToolInputError(f"not a directory: {input_data['path']}")
+            raise ToolInputError(f"not a directory: {requested_path}")
 
         workspace = context.workspace_path.resolve()
         entries: list[FileEntry] = []

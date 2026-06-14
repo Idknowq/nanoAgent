@@ -18,6 +18,7 @@ def test_cli_max_steps_default_comes_from_agent_config() -> None:
 def test_cli_exposes_explicit_permission_flags() -> None:
     parameters = inspect.signature(run).parameters
 
+    assert "user_request" in parameters
     assert "allow_command" in parameters
     assert "allow_write" in parameters
     assert "auto_approve" not in parameters
@@ -53,7 +54,14 @@ def test_cli_prints_compact_status_without_summary_content(monkeypatch, tmp_path
         ),
     )
 
-    monkeypatch.setattr("nano_agent.cli.NanoAgent.run", lambda self, repo_url: result)
+    received: dict[str, str] = {}
+
+    def fake_run(self, repo_url: str, user_request: str) -> RunSummary:  # type: ignore[no-untyped-def]
+        received["repo_url"] = repo_url
+        received["user_request"] = user_request
+        return result
+
+    monkeypatch.setattr("nano_agent.cli.NanoAgent.run", fake_run)
     runner = CliRunner()
 
     response = runner.invoke(
@@ -61,6 +69,7 @@ def test_cli_prints_compact_status_without_summary_content(monkeypatch, tmp_path
         [
             "run",
             "https://example.com/repo.git",
+            "Inspect Click help generation and tests.",
             "--workdir",
             str(tmp_path / "workspaces"),
         ],
@@ -72,3 +81,7 @@ def test_cli_prints_compact_status_without_summary_content(monkeypatch, tmp_path
     assert "report.md" in response.output
     assert "SECRET REPORT CONTENT" not in response.output
     assert '"completion_report"' not in response.output
+    assert received == {
+        "repo_url": "https://example.com/repo.git",
+        "user_request": "Inspect Click help generation and tests.",
+    }

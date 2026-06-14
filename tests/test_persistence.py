@@ -94,7 +94,8 @@ def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path)
     )
 
     result = NanoAgent(config, llm=TodoThenFinishLLM()).run(  # type: ignore[arg-type]
-        "https://example.com/repo.git"
+        "https://example.com/repo.git",
+        "Inspect package metadata and repair verified defects.",
     )
 
     run_dir = config.runs_root / result.run_id
@@ -128,6 +129,14 @@ def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path)
         "node-repository",
         "python-repository",
     ]
+    messages = [
+        json.loads(line)["message"]
+        for line in (run_dir / "messages.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(
+        "Inspect package metadata and repair verified defects." in message["content"]
+        for message in messages
+    )
     report = (run_dir / "report.md").read_text(encoding="utf-8")
     assert "# nanoAgent Run Report" in report
     assert "**Status:** completed" in report
@@ -143,7 +152,8 @@ def test_disabled_context_compaction_omits_checkpoint_artifact(tmp_path: Path) -
     )
 
     result = NanoAgent(config, llm=TodoThenFinishLLM()).run(  # type: ignore[arg-type]
-        "https://example.com/repo.git"
+        "https://example.com/repo.git",
+        "Inspect the repository.",
     )
 
     run_dir = config.runs_root / result.run_id
