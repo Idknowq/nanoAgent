@@ -163,6 +163,25 @@ class AlwaysPromptTooLongLLM:
         )
 
 
+class InvalidResponseThenFinishLLM:
+    def __init__(self, failures: int = 1) -> None:
+        self.calls = 0  # 记录包含非法响应在内的调用次数。
+        self.failures = failures  # 返回非法响应的次数。
+        self.requests: list[list[AgentMessage]] = []  # 保存每次请求的消息快照。
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        self.requests.append([message.model_copy(deep=True) for message in messages])
+        if self.calls <= self.failures:
+            raise LLMServiceError(
+                "provider returned invalid tool call arguments",
+                kind=LLMErrorKind.INVALID_RESPONSE,
+                invalid_tool_name="read_file",
+                invalid_tool_arguments_preview='{"path":',
+            )
+        return LLMResponse(content="recovered", stop_reason="end_turn")
+
+
 def test_agent_loop_executes_tool_and_records_result(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
     llm: LLMClient = OneToolUseLLM()
     config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5)
@@ -350,6 +369,66 @@ def test_agent_loop_does_not_retry_non_transient_error(tmp_path: Path) -> None:
 
     assert captured.value.kind == LLMErrorKind.AUTHENTICATION
     assert llm.calls == 1
+
+
+def test_agent_loop_retries_invalid_response_once_with_repair_prompt(
+    tmp_path: Path,
+) -> None:
+    config = AgentConfig()
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
+        config=config,
+    )
+    llm = InvalidResponseThenFinishLLM()
+    loop = AgentLoop(
+        config=config,
+        llm=llm,  # type: ignore[arg-type]
+        tools=ToolRegistry(),
+        context=context,
+    )
+
+    result = loop.run(
+        RunSummary(run_id="test", repo_url=context.repo_url),
+        [AgentMessage(role="user", content="start")],
+    )
+
+    assert result.status == "completed"
+    assert result.llm_call_count == 2
+    assert llm.calls == 2
+    assert context.current_llm_call_id == "llm-1-invalid_response-1"
+    repair_prompt = llm.requests[1][-1]
+    assert repair_prompt.role == "system"
+    assert "Regenerate the complete next response" in repair_prompt.content
+    assert "Do not continue, reuse, or repair fragments" in repair_prompt.content
+
+
+def test_agent_loop_fails_after_second_invalid_response(tmp_path: Path) -> None:
+    config = AgentConfig()
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
+        config=config,
+    )
+    llm = InvalidResponseThenFinishLLM(failures=2)
+    loop = AgentLoop(
+        config=config,
+        llm=llm,  # type: ignore[arg-type]
+        tools=ToolRegistry(),
+        context=context,
+    )
+    run = RunSummary(run_id="test", repo_url=context.repo_url)
+
+    with pytest.raises(LLMServiceError) as captured:
+        loop.run(run, [AgentMessage(role="user", content="start")])
+
+    assert captured.value.kind == LLMErrorKind.INVALID_RESPONSE
+    assert llm.calls == 2
+    assert run.llm_call_count == 2
 
 
 def test_agent_loop_continues_after_output_truncation(tmp_path: Path) -> None:
@@ -634,6 +713,7 @@ def test_default_tool_registry_exposes_metadata(tmp_path: Path) -> None:
     assert command.category == "execution"
     assert command.requires_workspace
     assert command.is_mutating
+    assert any(spec.name == "grep" for spec in specs)
     assert any(spec.name == "finish_run" for spec in specs)
     assert all(spec.name != "bash" for spec in specs)
 

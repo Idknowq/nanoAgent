@@ -187,6 +187,7 @@ class SubagentManager:
             message_store=message_store,
             compactor=compactor,
             max_llm_calls=request.max_llm_calls,
+            reserve_final_step=True,
         )
         completed = loop.run(run, self.context_builder.build(request))
         return self._result_from_run(completed, context.subagent_id or "unknown", run_dir)

@@ -14,7 +14,7 @@ from nano_agent.tools.base import ToolContext, ToolSpec
 class LLMCallRecord(BaseModel):
     """Metadata for one LLM request without duplicating conversation content."""
 
-    schema_version: int = 2  # LLM 调用记录的数据结构版本。
+    schema_version: int = 3  # LLM 调用记录的数据结构版本。
     timestamp: datetime  # LLM 请求开始时间。
     run_id: str  # 调用所属的 Agent 运行标识。
     llm_call_id: str  # 当前运行内的 LLM 调用标识。
@@ -25,7 +25,7 @@ class LLMCallRecord(BaseModel):
     success: bool  # LLM 请求是否成功返回。
     stop_reason: str | None  # 成功响应的停止原因。
     provider_stop_reason: str | None  # Provider 返回的原始停止原因。
-    attempt_type: str  # primary、transient、continuation 或 reactive。
+    attempt_type: str  # primary、transient、continuation、reactive 或 invalid_response。
     attempt_index: int  # 当前恢复类型内的尝试序号。
     recovered_from_call_id: str | None  # 当前调用恢复自哪个失败或截断调用。
     retry_delay_seconds: float | None  # 当前 transient 调用前的等待时间。
@@ -40,6 +40,8 @@ class LLMCallRecord(BaseModel):
     error_kind: str | None  # 规范化后的 LLM 错误分类。
     status_code: int | None  # Provider HTTP 状态码。
     error_message: str | None  # 失败时的截断异常信息。
+    invalid_tool_name: str | None  # 非法工具调用中的截断工具名。
+    invalid_tool_arguments_preview: str | None  # 非法工具参数的截断原始预览。
 
 
 class LLMMetricsHook(NoOpHook):
@@ -102,6 +104,8 @@ class LLMMetricsHook(NoOpHook):
                 error_kind=None,
                 status_code=None,
                 error_message=None,
+                invalid_tool_name=None,
+                invalid_tool_arguments_preview=None,
             ),
         )
         self._pending_call_id = None
@@ -142,6 +146,14 @@ class LLMMetricsHook(NoOpHook):
                 error_kind=service_error.kind if service_error else None,
                 status_code=service_error.status_code if service_error else None,
                 error_message=str(error)[:2_000],
+                invalid_tool_name=(
+                    service_error.invalid_tool_name if service_error else None
+                ),
+                invalid_tool_arguments_preview=(
+                    service_error.invalid_tool_arguments_preview
+                    if service_error
+                    else None
+                ),
             ),
         )
         self._pending_call_id = None

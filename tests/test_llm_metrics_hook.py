@@ -48,6 +48,22 @@ class RateLimitedOnceLLM:
         return LLMResponse(content="done", stop_reason="end_turn")
 
 
+class InvalidResponseOnceLLM:
+    def __init__(self) -> None:
+        self.calls = 0  # 记录失败和恢复调用次数。
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        if self.calls == 1:
+            raise LLMServiceError(
+                "provider returned invalid tool call arguments",
+                kind=LLMErrorKind.INVALID_RESPONSE,
+                invalid_tool_name="read_file",
+                invalid_tool_arguments_preview='{"path":',
+            )
+        return LLMResponse(content="done", stop_reason="end_turn")
+
+
 class FailingBeforeHook(NoOpHook):
     def before_llm_call(self, context, messages, tools):  # type: ignore[no-untyped-def]
         raise RuntimeError("hook failed before request")
@@ -166,3 +182,29 @@ def test_llm_metrics_hook_records_recovery_attempt_metadata(tmp_path: Path) -> N
     assert recovered["attempt_index"] == 1
     assert recovered["recovered_from_call_id"] == "llm-1"
     assert recovered["retry_delay_seconds"] == 1
+
+
+def test_llm_metrics_hook_records_invalid_tool_call_and_recovery(
+    tmp_path: Path,
+) -> None:
+    context = make_context(tmp_path)
+    loop = AgentLoop(
+        config=context.config,
+        llm=InvalidResponseOnceLLM(),  # type: ignore[arg-type]
+        tools=ToolRegistry(),
+        context=context,
+        hooks=[LLMMetricsHook()],
+    )
+
+    loop.run(
+        RunSummary(run_id=context.run_id, repo_url=context.repo_url),
+        [AgentMessage(role="user", content="start")],
+    )
+
+    failed, recovered = read_records(context)
+    assert failed["error_kind"] == "invalid_response"
+    assert failed["invalid_tool_name"] == "read_file"
+    assert failed["invalid_tool_arguments_preview"] == '{"path":'
+    assert recovered["attempt_type"] == "invalid_response"
+    assert recovered["attempt_index"] == 1
+    assert recovered["recovered_from_call_id"] == "llm-1"

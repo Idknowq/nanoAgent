@@ -39,6 +39,65 @@ def test_read_file_supports_byte_offset_and_limit(tmp_path: Path) -> None:
     assert result.data["truncated"]
 
 
+def test_read_file_supports_inclusive_line_range(tmp_path: Path) -> None:
+    (tmp_path / "data.txt").write_text(
+        "one\ntwo\nthree\nfour\n",
+        encoding="utf-8",
+    )
+
+    result = ReadFileTool().invoke(
+        {"path": "data.txt", "line_start": 2, "line_end": 3},
+        make_context(tmp_path),
+    )
+
+    assert result.success
+    assert result.data["content"] == "two\nthree\n"
+    assert result.data["line_start"] == 2
+    assert result.data["line_end"] == 3
+    assert result.data["next_line"] is None
+    assert not result.data["truncated"]
+
+
+def test_read_file_line_range_is_bounded_by_configured_maximum(tmp_path: Path) -> None:
+    (tmp_path / "data.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    result = ReadFileTool().invoke(
+        {"path": "data.txt", "line_start": 1, "line_end": 3},
+        make_context(tmp_path, max_file_bytes=6),
+    )
+
+    assert result.success
+    assert result.data["content"] == "one\ntw"
+    assert result.data["line_end"] == 1
+    assert result.data["next_line"] == 2
+    assert result.data["truncated"]
+
+
+def test_read_file_rejects_mixed_or_invalid_read_modes(tmp_path: Path) -> None:
+    (tmp_path / "data.txt").write_text("one\ntwo\n", encoding="utf-8")
+    context = make_context(tmp_path)
+
+    mixed = ReadFileTool().invoke(
+        {"path": "data.txt", "offset": 0, "line_start": 1},
+        context,
+    )
+    missing_start = ReadFileTool().invoke(
+        {"path": "data.txt", "line_end": 2},
+        context,
+    )
+    reversed_range = ReadFileTool().invoke(
+        {"path": "data.txt", "line_start": 2, "line_end": 1},
+        context,
+    )
+
+    assert mixed.error_code == "invalid_input"
+    assert "mutually exclusive" in mixed.error_message
+    assert missing_start.error_code == "invalid_input"
+    assert "line_start is required" in missing_start.error_message
+    assert reversed_range.error_code == "invalid_input"
+    assert "line_end must be greater" in reversed_range.error_message
+
+
 def test_read_file_caps_limit_at_configured_maximum(tmp_path: Path) -> None:
     (tmp_path / "data.txt").write_bytes(b"abcdefgh")
 

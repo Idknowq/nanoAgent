@@ -14,6 +14,7 @@ from nano_agent.subagents.models import (
 )
 from nano_agent.tools.base import ToolContext, ToolRegistry
 from nano_agent.tools.delegate_task import DelegateTaskTool
+from nano_agent.tools.grep import GrepTool
 from nano_agent.tools.list_files import ListFilesTool
 from nano_agent.tools.read_file import ReadFileTool
 
@@ -47,6 +48,117 @@ class SuccessfulSubagentLLM:
 class InvalidEndTurnSubagentLLM:
     def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         return LLMResponse(content="done", stop_reason="end_turn")
+
+
+class ExploreThenFinalizeSubagentLLM:
+    def __init__(self) -> None:
+        self.calls = 0  # 记录子 Agent 已完成的逻辑步骤。
+        self.final_tools: set[str] = set()  # 最后一步向模型暴露的工具名称。
+        self.saw_final_prompt = False  # 最后一步是否收到强制总结提示。
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                stop_reason="tool_use",
+                tool_uses=[
+                    ToolUseRequest(
+                        id="read-evidence",
+                        name="read_file",
+                        input={"path": "evidence.txt"},
+                    )
+                ],
+            )
+        self.final_tools = {tool.name for tool in tools}
+        self.saw_final_prompt = any(
+            "final response opportunity" in message.content for message in messages
+        )
+        return LLMResponse(
+            stop_reason="tool_use",
+            tool_uses=[
+                ToolUseRequest(
+                    id="finish-finalization",
+                    name="finish_run",
+                    input={
+                        "status": "blocked",
+                        "problem": "The delegated investigation is incomplete.",
+                        "root_cause": "The finalization budget was reached.",
+                        "resolution": "Collected partial evidence from evidence.txt.",
+                        "blockers": ["Further investigation requires another delegation."],
+                    },
+                )
+            ],
+        )
+
+
+class RejectFinalizationThenCorrectSubagentLLM:
+    def __init__(self) -> None:
+        self.calls = 0  # 记录调查、错误总结和协议纠正调用。
+        self.final_tool_sets: list[set[str]] = []  # 保存最终阶段暴露的工具集合。
+        self.saw_correction_prompt = False  # 是否收到最终协议纠正提示。
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                stop_reason="tool_use",
+                tool_uses=[
+                    ToolUseRequest(
+                        id="read-evidence",
+                        name="read_file",
+                        input={"path": "evidence.txt"},
+                    )
+                ],
+            )
+        self.final_tool_sets.append({tool.name for tool in tools})
+        if self.calls == 2:
+            return LLMResponse(
+                stop_reason="tool_use",
+                tool_uses=[
+                    ToolUseRequest(
+                        id="invalid-final-read",
+                        name="read_file",
+                        input={"path": "evidence.txt"},
+                    )
+                ],
+            )
+        self.saw_correction_prompt = any(
+            "only protocol-correction call" in message.content for message in messages
+        )
+        return LLMResponse(
+            stop_reason="tool_use",
+            tool_uses=[
+                ToolUseRequest(
+                    id="corrected-finish",
+                    name="finish_run",
+                    input={
+                        "status": "blocked",
+                        "problem": "The delegated investigation is incomplete.",
+                        "root_cause": "The investigation budget was exhausted.",
+                        "resolution": "Returned the reliable partial evidence.",
+                        "blockers": ["More file inspection is required."],
+                    },
+                )
+            ],
+        )
+
+
+class RejectBothFinalizationCallsSubagentLLM:
+    def __init__(self) -> None:
+        self.calls = 0  # 记录最终协议持续失败前的调用次数。
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        return LLMResponse(
+            stop_reason="tool_use",
+            tool_uses=[
+                ToolUseRequest(
+                    id=f"invalid-read-{self.calls}",
+                    name="read_file",
+                    input={"path": "evidence.txt"},
+                )
+            ],
+        )
 
 
 class BlockedSubagentLLM:
@@ -95,7 +207,7 @@ def make_manager(
         audit_enabled=False,
     )
     context = make_parent_context(tmp_path, active_config)
-    tools = ToolRegistry([ListFilesTool(), ReadFileTool()])
+    tools = ToolRegistry([ListFilesTool(), GrepTool(), ReadFileTool()])
     manager = SubagentManager(
         config=active_config,
         llm=llm,
@@ -289,6 +401,70 @@ def test_subagent_step_limit_returns_structured_failure(tmp_path: Path) -> None:
     assert result.status == SubagentStatus.FAILED
     assert result.error_kind == SubagentErrorKind.STEP_LIMIT
     assert result.steps_used == 1
+
+
+def test_subagent_reserves_last_step_for_finish_run(tmp_path: Path) -> None:
+    (tmp_path / "evidence.txt").write_text("evidence", encoding="utf-8")
+    llm = ExploreThenFinalizeSubagentLLM()
+    manager, _ = make_manager(tmp_path, llm)
+
+    result = manager.run(
+        SubagentRequest(
+            task="Inspect evidence and summarize.",
+            allowed_tools=("read_file",),
+            max_steps=2,
+            max_llm_calls=3,
+        )
+    )
+
+    assert result.status == SubagentStatus.BLOCKED
+    assert result.error == "Collected partial evidence from evidence.txt."
+    assert llm.calls == 2
+    assert llm.final_tools == {"finish_run"}
+    assert llm.saw_final_prompt
+
+
+def test_subagent_corrects_invalid_finalization_once(tmp_path: Path) -> None:
+    (tmp_path / "evidence.txt").write_text("evidence", encoding="utf-8")
+    llm = RejectFinalizationThenCorrectSubagentLLM()
+    manager, _ = make_manager(tmp_path, llm)
+
+    result = manager.run(
+        SubagentRequest(
+            task="Inspect evidence and summarize.",
+            allowed_tools=("read_file",),
+            max_steps=2,
+            max_llm_calls=4,
+        )
+    )
+
+    assert result.status == SubagentStatus.BLOCKED
+    assert result.error == "Returned the reliable partial evidence."
+    assert result.steps_used == 2
+    assert result.llm_calls_used == 3
+    assert llm.final_tool_sets == [{"finish_run"}, {"finish_run"}]
+    assert llm.saw_correction_prompt
+
+
+def test_subagent_fails_after_invalid_finalization_correction(tmp_path: Path) -> None:
+    (tmp_path / "evidence.txt").write_text("evidence", encoding="utf-8")
+    llm = RejectBothFinalizationCallsSubagentLLM()
+    manager, _ = make_manager(tmp_path, llm)
+
+    result = manager.run(
+        SubagentRequest(
+            task="Inspect evidence and summarize.",
+            allowed_tools=("read_file",),
+            max_steps=1,
+            max_llm_calls=3,
+        )
+    )
+
+    assert result.status == SubagentStatus.FAILED
+    assert result.error_kind == SubagentErrorKind.STEP_LIMIT
+    assert result.steps_used == 1
+    assert result.llm_calls_used == 2
+    assert "one protocol-correction call" in (result.error or "")
 
 
 def test_delegate_task_rejects_recursive_delegation(tmp_path: Path) -> None:

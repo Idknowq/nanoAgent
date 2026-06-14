@@ -12,7 +12,7 @@ class AgentConfig(BaseModel):
     runs_root: Path = Field(default=Path(".nano/runs"))  # 每次运行摘要 JSON 的保存目录。
     llm_provider: str = "deepseek"  # 生产运行默认使用 DeepSeek。
     llm_model: str | None = None  # LLM 模型名；为空时由 provider 默认值决定。
-    max_steps: int = Field(default=50, ge=1)  # Agent 最大执行步数，防止后续 planner 死循环。
+    max_steps: int = Field(default=70, ge=1)  # Agent 最大执行步数，防止后续 planner 死循环。
     command_timeout_seconds: int = Field(default=120, ge=1)  # 单个 shell 命令的超时时间。
     execution_isolation_enabled: bool = True  # 是否启用 run 级命令执行环境隔离。
     python_executable: Path | None = None  # 创建隔离 Python 环境时使用的解释器。
@@ -48,12 +48,13 @@ class AgentConfig(BaseModel):
     llm_retry_jitter_seconds: float = Field(default=0.5, ge=0)  # 退避随机抖动上限。
     llm_max_continuations: int = Field(default=2, ge=0, le=5)  # 输出截断后的最大续写次数。
     subagents_enabled: bool = True  # 是否向主 Agent 暴露同步任务委派工具。
-    subagent_max_steps: int = Field(default=12, ge=1, le=100)  # 单个子 Agent 最大循环步数。
-    subagent_max_llm_calls: int = Field(default=20, ge=1, le=200)  # 子 Agent LLM 调用预算。
+    subagent_max_steps: int = Field(default=20, ge=1, le=100)  # 单个子 Agent 最大循环步数。
+    subagent_max_llm_calls: int = Field(default=40, ge=1, le=200)  # 子 Agent LLM 调用预算。
     subagent_max_task_chars: int = Field(default=4_000, ge=1)  # 委派任务文本长度上限。
     subagent_max_context_chars: int = Field(default=12_000, ge=0)  # 显式背景信息长度上限。
     subagent_max_result_chars: int = Field(default=12_000, ge=100)  # 回传主 Agent 的结果上限。
     subagent_default_tools: tuple[str, ...] = (
         "list_files",
+        "grep",
         "read_file",
     )  # 未显式指定时授予子 Agent 的只读工具。

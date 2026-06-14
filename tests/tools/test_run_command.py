@@ -42,6 +42,23 @@ def test_run_command_executes_structured_arguments(tmp_path: Path) -> None:
     assert result.data["cwd"] == "."
 
 
+def test_python_alias_uses_same_isolated_interpreter_as_python3(tmp_path: Path) -> None:
+    context = make_context(tmp_path)
+    python = RunCommandTool().invoke(
+        {"program": "python", "args": ["-c", "import sys; print(sys.executable)"]},
+        context,
+    )
+    python3 = RunCommandTool().invoke(
+        {"program": "python3", "args": ["-c", "import sys; print(sys.executable)"]},
+        context,
+    )
+
+    assert python.success
+    assert python3.success
+    assert python.data["resolved_program"] == python3.data["resolved_program"]
+    assert python.data["stdout_tail"] == python3.data["stdout_tail"]
+
+
 def test_run_command_resolves_relative_runtime_dir_before_changing_cwd(
     tmp_path: Path,
     monkeypatch,
@@ -152,6 +169,18 @@ def test_run_command_rejects_program_outside_allowlist(tmp_path: Path) -> None:
 
     assert result.error_code == "invalid_input"
     assert "not allowed" in result.error_message
+
+
+def test_run_command_suggests_read_file_for_shell_readers(tmp_path: Path) -> None:
+    context = make_context(tmp_path)
+
+    sed = RunCommandTool().invoke({"program": "sed"}, context)
+    head = RunCommandTool().invoke({"program": "head"}, context)
+    cat = RunCommandTool().invoke({"program": "cat"}, context)
+
+    assert "read_file with line_start and line_end" in sed.error_message
+    assert "read_file with line_start=1" in head.error_message
+    assert "Use read_file with path" in cat.error_message
 
 
 def test_run_command_rejects_program_path_and_cwd_escape(tmp_path: Path) -> None:

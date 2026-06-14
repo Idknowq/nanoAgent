@@ -44,6 +44,7 @@ class AgentLoop:
         retry_policy: RetryPolicy | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         max_llm_calls: int | None = None,
+        reserve_final_step: bool = False,
     ) -> None:
         self.config = config  # 保存最大步数等循环控制配置。
         self.llm = llm  # 保存当前使用的 LLM 客户端。
@@ -59,6 +60,7 @@ class AgentLoop:
         )
         self.sleeper = sleeper
         self.max_llm_calls = max_llm_calls  # 当前 loop 允许的物理 LLM 调用上限。
+        self.reserve_final_step = reserve_final_step  # 是否保留最后一步提交终止总结。
 
     def run(self, run: RunSummary, initial_messages: list[AgentMessage]) -> RunSummary:
         messages = list(initial_messages)
@@ -67,11 +69,47 @@ class AgentLoop:
             self.message_store.append_many(messages)
         invalid_end_turns = 0
 
-        for step_index in range(self.config.max_steps):
-            self.context.current_step = step_index + 1
+        loop_iterations = self.config.max_steps + int(self.reserve_final_step)
+        for step_index in range(loop_iterations):
+            self.context.current_step = min(step_index + 1, self.config.max_steps)
             self.context.max_steps = self.config.max_steps
             run.steps = self.context.current_step
             tool_specs = self.tools.specs()
+            finalization_step = (
+                self.reserve_final_step and step_index >= self.config.max_steps - 1
+            )
+            finalization_correction = (
+                self.reserve_final_step and step_index == self.config.max_steps
+            )
+            if finalization_step:
+                self._append_messages(
+                    messages,
+                    [
+                        AgentMessage(
+                            role="system",
+                            content=(
+                                (
+                                    "Your previous finalization response was invalid. This is the "
+                                    "only protocol-correction call. Do not request any investigation "
+                                    "or file tools. Call finish_run exactly once as the only tool "
+                                    "call, summarizing the reliable evidence already collected. "
+                                    "Use blocked or failed if the delegated task is incomplete."
+                                )
+                                if finalization_correction
+                                else (
+                                    "This is the final response opportunity. Do not perform further "
+                                    "investigation. Summarize the reliable evidence already collected "
+                                    "and call finish_run as the only tool call. Use completed only when "
+                                    "the delegated task is complete; otherwise use blocked or failed "
+                                    "and state the partial findings and remaining uncertainty."
+                                )
+                            ),
+                        )
+                    ],
+                )
+                tool_specs = [
+                    spec for spec in tool_specs if spec.name == FinishRunTool.name
+                ]
             if self.compactor is not None:
                 summary_calls = self.compactor.summary_llm_call_count
                 messages = self.compactor.prepare(messages, tool_specs)
@@ -97,6 +135,21 @@ class AgentLoop:
                 self._append_messages(messages, deferred_hook_messages)
                 if not self.tools.contains(FinishRunTool.name):
                     run.status = RunStatus.COMPLETED
+                    run.messages = messages
+                    return run
+                if finalization_step and not finalization_correction:
+                    run.messages = messages
+                    continue
+                if finalization_correction:
+                    run.status = RunStatus.FAILED
+                    run.notes.append(f"Agent loop exceeded max_steps={self.config.max_steps}")
+                    run.notes.append(
+                        "Agent finalization failed after one protocol-correction call."
+                    )
+                    run.completion_report = self._protocol_failure_report(
+                        "The model ended the finalization correction without a valid "
+                        "finish_run tool call."
+                    )
                     run.messages = messages
                     return run
                 invalid_end_turns += 1
@@ -140,6 +193,38 @@ class AgentLoop:
                 and response.tool_uses[0].name == FinishRunTool.name
             )
             for tool_use in response.tool_uses:
+                if finalization_step and tool_use.name != FinishRunTool.name:
+                    result = ToolResult.failure(
+                        code="finalization_tool_denied",
+                        message=(
+                            "Only finish_run is available during the reserved finalization step."
+                        ),
+                    )
+                    run.tool_calls.append(
+                        ToolCallRecord(
+                            tool_call_id=tool_use.id,
+                            tool_name=tool_use.name,
+                            input_summary=json.dumps(tool_use.input, ensure_ascii=False),
+                            output_summary=result.summary,
+                            approval_level="read",  # type: ignore
+                            duration_seconds=0.0,
+                            success=False,
+                        )
+                    )
+                    self._append_messages(
+                        messages,
+                        [
+                            AgentMessage(
+                                role="tool",
+                                content=json.dumps(
+                                    result.model_dump(mode="json"),
+                                    ensure_ascii=False,
+                                ),
+                                tool_call_id=tool_use.id,
+                            )
+                        ],
+                    )
+                    continue
                 try:
                     tool = self.tools.get(tool_use.name)
                 except KeyError:
@@ -234,9 +319,17 @@ class AgentLoop:
 
         run.status = RunStatus.FAILED
         run.notes.append(f"Agent loop exceeded max_steps={self.config.max_steps}")
-        run.completion_report = self._protocol_failure_report(
-            f"Agent loop exceeded max_steps={self.config.max_steps} without a valid finish_run."
-        )
+        if self.reserve_final_step:
+            resolution = (
+                "The model did not submit a valid finish_run after the reserved finalization "
+                "call and one protocol-correction call."
+            )
+        else:
+            resolution = (
+                f"Agent loop exceeded max_steps={self.config.max_steps} without a valid "
+                "finish_run."
+            )
+        run.completion_report = self._protocol_failure_report(resolution)
         run.messages = messages
         return run
 
@@ -249,6 +342,7 @@ class AgentLoop:
         transient_retries = 0
         continuation_count = 0
         reactive_used = False
+        invalid_response_used = False
         attempt_type = "primary"
         attempt_index = 0
         recovered_from: str | None = None
@@ -267,6 +361,28 @@ class AgentLoop:
                 )
             except LLMServiceError as exc:
                 failed_call_id = self.context.current_llm_call_id
+                if exc.kind == LLMErrorKind.INVALID_RESPONSE and not invalid_response_used:
+                    invalid_response_used = True
+                    self._append_messages(
+                        messages,
+                        [
+                            AgentMessage(
+                                role="system",
+                                content=(
+                                    "The provider returned an invalid response, usually malformed "
+                                    "tool-call arguments. Regenerate the complete next response. "
+                                    "If calling a tool, emit a new complete tool call with valid "
+                                    "JSON arguments that match its schema. Do not continue, reuse, "
+                                    "or repair fragments from the invalid tool call."
+                                ),
+                            )
+                        ],
+                    )
+                    attempt_type = "invalid_response"
+                    attempt_index = 1
+                    recovered_from = failed_call_id
+                    retry_delay = None
+                    continue
                 if exc.retryable and transient_retries < self.config.llm_max_transient_retries:
                     transient_retries += 1
                     retry_delay = self.retry_policy.delay_seconds(exc, transient_retries)

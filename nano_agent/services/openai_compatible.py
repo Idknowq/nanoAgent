@@ -18,6 +18,9 @@ from nano_agent.services.errors import LLMErrorKind, LLMServiceError, normalize_
 from nano_agent.services.registry import register_llm_provider
 from nano_agent.tools.base import ToolSpec
 
+INVALID_TOOL_NAME_PREVIEW_CHARS = 200
+INVALID_TOOL_ARGUMENTS_PREVIEW_CHARS = 2_000
+
 
 class OpenAICompatibleLLMClient:
     """OpenAI API 格式的 LLM 客户端，用于 DeepSeek 等兼容服务。"""
@@ -107,28 +110,58 @@ class OpenAICompatibleLLMClient:
     ) -> tuple[list[ToolUseRequest], bool]:
         parsed: list[ToolUseRequest] = []
         for tool_call in tool_calls:
+            tool_name = str(getattr(tool_call.function, "name", "") or "")
+            raw_arguments = getattr(tool_call.function, "arguments", None)
             try:
-                input_data = json.loads(tool_call.function.arguments or "{}")
+                input_data = json.loads(raw_arguments or "{}")
             except (json.JSONDecodeError, TypeError) as exc:
                 if stop_reason == LLMStopReason.MAX_TOKENS:
                     return [], True
                 raise LLMServiceError(
                     "provider returned invalid tool call arguments",
                     kind=LLMErrorKind.INVALID_RESPONSE,
+                    invalid_tool_name=OpenAICompatibleLLMClient._bounded_preview(
+                        tool_name,
+                        INVALID_TOOL_NAME_PREVIEW_CHARS,
+                    ),
+                    invalid_tool_arguments_preview=(
+                        OpenAICompatibleLLMClient._bounded_preview(
+                            raw_arguments,
+                            INVALID_TOOL_ARGUMENTS_PREVIEW_CHARS,
+                        )
+                    ),
                 ) from exc
             if not isinstance(input_data, dict):
                 raise LLMServiceError(
                     "provider tool call arguments must decode to an object",
                     kind=LLMErrorKind.INVALID_RESPONSE,
+                    invalid_tool_name=OpenAICompatibleLLMClient._bounded_preview(
+                        tool_name,
+                        INVALID_TOOL_NAME_PREVIEW_CHARS,
+                    ),
+                    invalid_tool_arguments_preview=(
+                        OpenAICompatibleLLMClient._bounded_preview(
+                            raw_arguments,
+                            INVALID_TOOL_ARGUMENTS_PREVIEW_CHARS,
+                        )
+                    ),
                 )
             parsed.append(
                 ToolUseRequest(
                     id=tool_call.id,
-                    name=tool_call.function.name,
+                    name=tool_name,
                     input=input_data,
                 )
             )
         return parsed, False
+
+    @staticmethod
+    def _bounded_preview(value: Any, max_chars: int) -> str:
+        text = value if isinstance(value, str) else repr(value)
+        if len(text) <= max_chars:
+            return text
+        marker = "...[truncated]"
+        return text[: max_chars - len(marker)] + marker
 
     def _to_openai_messages(self, messages: list[AgentMessage]) -> list[dict[str, Any]]:
         converted: list[dict[str, Any]] = []

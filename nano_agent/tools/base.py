@@ -65,7 +65,7 @@ class ToolContext(BaseModel):
     current_llm_call_id: str | None = None  # 当前步骤的 LLM 调用 id，关联消息和审计记录。
     current_llm_started_at: datetime | None = None  # 当前 LLM 调用开始时间。
     current_llm_duration_seconds: float | None = None  # 当前 LLM 调用耗时。
-    current_llm_attempt_type: str = "primary"  # primary、transient、continuation 或 reactive。
+    current_llm_attempt_type: str = "primary"  # primary、transient、continuation、reactive 或 invalid_response。
     current_llm_attempt_index: int = 0  # 当前恢复类型内的尝试序号。
     current_llm_recovered_from: str | None = None  # 当前调用恢复自哪个 LLM 调用。
     current_llm_retry_delay_seconds: float | None = None  # 临时故障重试前等待时间。
@@ -198,6 +198,7 @@ def _import_builtin_tools() -> None:
     import nano_agent.tools.clone_repo  # noqa: F401
     import nano_agent.tools.edit_file  # noqa: F401
     import nano_agent.tools.finish_run  # noqa: F401
+    import nano_agent.tools.grep  # noqa: F401
     import nano_agent.tools.list_files  # noqa: F401
     import nano_agent.tools.read_file  # noqa: F401
     import nano_agent.tools.run_command  # noqa: F401

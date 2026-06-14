@@ -97,6 +97,7 @@ def test_prompt_assembler_keeps_stable_core_and_exposes_only_skill_metadata(
         first.messages[0].content
     )
     assert "use `list_files` instead of `ls` or `find`" in first.messages[0].content
+    assert "`grep` for text or symbol search" in first.messages[0].content
     assert 'Use `"."` for the workspace root' in first.messages[0].content
 
 

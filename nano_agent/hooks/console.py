@@ -34,7 +34,7 @@ class ConsoleEvent(BaseModel):
     model: str | None = None  # LLM 模型名。
     stop_reason: str | None = None  # LLM 停止原因。
     requested_tool_count: int = 0  # LLM 请求的工具数量。
-    attempt_type: str = "primary"  # primary、transient、continuation 或 reactive。
+    attempt_type: str = "primary"  # primary、transient、continuation、reactive 或 invalid_response。
     attempt_index: int = 0  # 当前恢复类型内的尝试序号。
     retry_delay_seconds: float | None = None  # transient 请求前等待时间。
     input_tokens: int | None = None  # LLM 输入 token 数。

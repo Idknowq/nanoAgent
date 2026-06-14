@@ -13,7 +13,9 @@ from nano_agent.tools.errors import ToolExecutionError
 class ExecutionEnvironmentManager:
     """Prepare and resolve programs inside one run-scoped execution environment."""
 
-    _PYTHON_PROGRAMS = frozenset({"python3", "pytest", "ruff", "pip"})
+    _PYTHON_PROGRAMS = frozenset(
+        {"python", "python3", "pytest", "ruff", "pip"}
+    )  # 必须从隔离虚拟环境解析的 Python 工具。
 
     def __init__(self, runtime_dir: Path, config: AgentConfig) -> None:
         self.runtime_dir = runtime_dir.resolve()  # 当前 run 的隔离执行环境绝对路径。
@@ -136,9 +138,9 @@ class ExecutionEnvironmentManager:
             directory.mkdir(parents=True, exist_ok=True)
 
     def _python_program_path(self, program: str) -> Path:
-        executable_name = "python.exe" if os.name == "nt" and program == "python3" else program
-        if program == "python3" and os.name != "nt":
-            executable_name = "python"
+        executable_name = program
+        if program in {"python", "python3"}:
+            executable_name = "python.exe" if os.name == "nt" else "python"
         return self._python_bin_dir() / executable_name
 
     def _python_bin_dir(self) -> Path:

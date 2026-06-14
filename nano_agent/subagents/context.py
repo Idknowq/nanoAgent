@@ -14,6 +14,12 @@ class SubagentContextBuilder:
                 content=(
                     "You are a scoped subagent. Work only on the delegated task using the "
                     "available tools. You do not have access to the parent conversation. "
+                    "Inspect available tool schemas before acting. Prefer grep for text or "
+                    "symbol search, then use read_file with a returned byte offset or an "
+                    "explicit line_start/line_end range for bounded inspection. Do not call "
+                    "run_command with grep, sed, awk, find, "
+                    "cat, pwd, or Python search scripts when structured tools cover the work. "
+                    "After a rejected operation, change strategy instead of retrying it. "
                     "Do not delegate to another agent. Do not claim actions or evidence you "
                     "did not observe. Finish by calling finish_run as the only tool call."
                 ),

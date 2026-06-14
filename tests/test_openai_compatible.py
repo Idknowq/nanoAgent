@@ -112,6 +112,26 @@ def test_openai_client_marks_truncated_invalid_tool_call() -> None:
     assert truncated
 
 
+def test_openai_client_records_bounded_invalid_tool_call_arguments() -> None:
+    arguments = '{"action":"' + ("x" * 3_000)
+    tool_call = SimpleNamespace(
+        id="call_1",
+        function=SimpleNamespace(name="todo_write", arguments=arguments),
+    )
+
+    with pytest.raises(LLMServiceError) as captured:
+        OpenAICompatibleLLMClient._parse_tool_calls(  # noqa: SLF001
+            [tool_call],
+            stop_reason=LLMStopReason.TOOL_USE,
+        )
+
+    assert captured.value.kind == LLMErrorKind.INVALID_RESPONSE
+    assert captured.value.invalid_tool_name == "todo_write"
+    assert captured.value.invalid_tool_arguments_preview.startswith('{"action":"')
+    assert captured.value.invalid_tool_arguments_preview.endswith("...[truncated]")
+    assert len(captured.value.invalid_tool_arguments_preview) == 2_000
+
+
 @pytest.mark.parametrize(
     ("status_code", "message", "expected"),
     [

@@ -39,11 +39,15 @@ class LLMServiceError(RuntimeError):
         kind: LLMErrorKind,
         status_code: int | None = None,
         retry_after_seconds: float | None = None,
+        invalid_tool_name: str | None = None,
+        invalid_tool_arguments_preview: str | None = None,
     ) -> None:
         super().__init__(message)
         self.kind = kind
         self.status_code = status_code
         self.retry_after_seconds = retry_after_seconds
+        self.invalid_tool_name = invalid_tool_name
+        self.invalid_tool_arguments_preview = invalid_tool_arguments_preview
 
     @property
     def retryable(self) -> bool:
