@@ -47,3 +47,13 @@ class AgentConfig(BaseModel):
     llm_retry_max_seconds: float = Field(default=8.0, ge=0)  # 本地退避最大等待秒数。
     llm_retry_jitter_seconds: float = Field(default=0.5, ge=0)  # 退避随机抖动上限。
     llm_max_continuations: int = Field(default=2, ge=0, le=5)  # 输出截断后的最大续写次数。
+    subagents_enabled: bool = True  # 是否向主 Agent 暴露同步任务委派工具。
+    subagent_max_steps: int = Field(default=12, ge=1, le=100)  # 单个子 Agent 最大循环步数。
+    subagent_max_llm_calls: int = Field(default=20, ge=1, le=200)  # 子 Agent LLM 调用预算。
+    subagent_max_task_chars: int = Field(default=4_000, ge=1)  # 委派任务文本长度上限。
+    subagent_max_context_chars: int = Field(default=12_000, ge=0)  # 显式背景信息长度上限。
+    subagent_max_result_chars: int = Field(default=12_000, ge=100)  # 回传主 Agent 的结果上限。
+    subagent_default_tools: tuple[str, ...] = (
+        "list_files",
+        "read_file",
+    )  # 未显式指定时授予子 Agent 的只读工具。

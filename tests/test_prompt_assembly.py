@@ -92,6 +92,7 @@ def test_prompt_assembler_keeps_stable_core_and_exposes_only_skill_metadata(
     assert first.available_skill_names == ["python-repository"]
     assert "Diagnose Python failures." in catalog.content
     assert body not in "\n".join(message.content for message in first.messages)
+    assert "Use `delegate_task` when a scoped investigation" in first.messages[0].content
 
 
 def test_prompt_assembler_selectively_injects_memory(tmp_path: Path) -> None:

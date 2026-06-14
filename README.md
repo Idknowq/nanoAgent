@@ -2,8 +2,8 @@
 
 `nanoAgent` is a lightweight AI Agent prototype for repository diagnosis and small-scope code repair.
 
-Current phase: single-agent tool-use loop with guarded tools, run persistence, and
-cache-oriented prompt composition.
+Current phase: guarded tool-use loops with run persistence, cache-oriented prompt composition,
+and synchronous one-level subagent delegation.
 
 Planned MVP loop:
 
@@ -29,6 +29,14 @@ compaction retry and then fail without further emergency compaction.
 Runs terminate through the structured `finish_run` tool. The validated user-facing result is
 written to `.nano/runs/<run_id>/report.md`; the terminal prints only concise progress and the
 report path, not the report body or full run summary.
+
+The main Agent can call `delegate_task` to run one scoped task in a child `AgentLoop`. A child
+receives only the delegated task and explicit context, has independent messages, counters,
+compaction state, hooks, and persistence, and can use only a reconstructible subset of the
+parent's tools. Child lifecycle and results are stored under
+`.nano/runs/<run_id>/subagents/<subagent_id>/`. The current MVP executes one child
+synchronously and forbids recursive delegation; parallel scheduling and running-task
+cancellation are not implemented.
 
 ## Setup
 

@@ -69,6 +69,9 @@ class ToolContext(BaseModel):
     current_llm_attempt_index: int = 0  # 当前恢复类型内的尝试序号。
     current_llm_recovered_from: str | None = None  # 当前调用恢复自哪个 LLM 调用。
     current_llm_retry_delay_seconds: float | None = None  # 临时故障重试前等待时间。
+    parent_run_id: str | None = None  # 子 Agent 对应的父运行；主 Agent 为空。
+    subagent_id: str | None = None  # 当前子 Agent 标识；主 Agent 为空。
+    delegation_depth: int = 0  # 委派深度；MVP 只允许主 Agent 创建一层子 Agent。
 
 
 class ToolInput(BaseModel):
@@ -153,6 +156,12 @@ class ToolRegistry:
 
     def contains(self, name: str) -> bool:
         return name in self._tools
+
+    def names(self) -> set[str]:
+        return set(self._tools)
+
+    def selected(self, names: set[str]) -> ToolRegistry:
+        return ToolRegistry([tool for name, tool in self._tools.items() if name in names])
 
     def specs(self) -> list[ToolSpec]:
         return [

@@ -20,8 +20,10 @@ from nano_agent.services.llm import LLMClient
 from nano_agent.services.registry import create_llm_client
 from nano_agent.skills.registry import SkillRegistry
 from nano_agent.skills.session import SkillSession
+from nano_agent.subagents.manager import SubagentManager
 from nano_agent.tools.activate_skill import ActivateSkillTool
 from nano_agent.tools.base import ToolContext, build_default_tool_registry
+from nano_agent.tools.delegate_task import DelegateTaskTool
 from nano_agent.workspace import WorkspaceManager
 
 
@@ -87,6 +89,17 @@ class NanoAgent:
                 SkillActivationHook(skill_session),
                 *build_default_hooks(self.config),
             ]
+            if self.config.subagents_enabled:
+                tools.register(
+                    DelegateTaskTool(
+                        SubagentManager(
+                            config=self.config,
+                            llm=llm,
+                            parent_context=context,
+                            parent_tools=tools,
+                        )
+                    )
+                )
             prompt_bundle = self.prompt_assembler.assemble(
                 PromptRequest(
                     user_request=(

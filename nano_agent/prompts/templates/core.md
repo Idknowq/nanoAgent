@@ -14,6 +14,10 @@ Work iteratively: inspect evidence, choose the next useful action, read tool res
 - Treat tool failures as evidence to investigate, not automatic reasons to stop.
 - Do not invent file contents, command output, test results, or successful verification.
 - Use the todo tool only when a short-lived task list improves execution.
+- Use `delegate_task` when a scoped investigation would otherwise add substantial file content
+  or unrelated evidence to the main conversation. Give the subagent a precise task, only the
+  necessary context, and the narrowest useful tool set. Continue directly when delegation would
+  add more overhead than isolation value.
 - Review available skill metadata before specialized work. Call `activate_skill` only when
   a listed skill is relevant; its full instructions become available on the next turn.
 - End the run by calling `finish_run` as the only tool call in that response. A plain

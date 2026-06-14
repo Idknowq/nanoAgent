@@ -25,6 +25,10 @@ from nano_agent.tools.base import ToolContext, ToolRegistry, ToolResult, ToolSpe
 from nano_agent.tools.finish_run import FinishRunTool
 
 
+class AgentLoopLimitError(RuntimeError):
+    """Raised when a configured physical LLM call budget is exhausted."""
+
+
 class AgentLoop:
     """Claude Code 风格的核心循环：LLM 响应、工具调用、工具结果回填、继续循环。"""
 
@@ -39,6 +43,7 @@ class AgentLoop:
         compactor: ContextCompactor | None = None,
         retry_policy: RetryPolicy | None = None,
         sleeper: Callable[[float], None] = time.sleep,
+        max_llm_calls: int | None = None,
     ) -> None:
         self.config = config  # 保存最大步数等循环控制配置。
         self.llm = llm  # 保存当前使用的 LLM 客户端。
@@ -53,6 +58,7 @@ class AgentLoop:
             jitter_seconds=config.llm_retry_jitter_seconds,
         )
         self.sleeper = sleeper
+        self.max_llm_calls = max_llm_calls  # 当前 loop 允许的物理 LLM 调用上限。
 
     def run(self, run: RunSummary, initial_messages: list[AgentMessage]) -> RunSummary:
         messages = list(initial_messages)
@@ -335,6 +341,10 @@ class AgentLoop:
         recovered_from: str | None,
         retry_delay: float | None,
     ) -> tuple[LLMResponse, list[AgentMessage]]:
+        if self.max_llm_calls is not None and run.llm_call_count >= self.max_llm_calls:
+            raise AgentLoopLimitError(
+                f"Agent loop exceeded max_llm_calls={self.max_llm_calls}"
+            )
         self.context.current_llm_call_id = self._llm_call_id(attempt_type, attempt_index)
         self.context.current_llm_started_at = None
         self.context.current_llm_duration_seconds = None
