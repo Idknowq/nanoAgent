@@ -42,3 +42,8 @@ class AgentConfig(BaseModel):
     max_auto_compactions: int = Field(default=3, ge=0, le=3)  # 单次 run 自动摘要上限。
     reactive_keep_recent_messages: int = Field(default=8, ge=1)  # 应急压缩保留的尾部消息数。
     max_reactive_compactions: int = Field(default=1, ge=0, le=1)  # 单次 run 应急压缩上限。
+    llm_max_transient_retries: int = Field(default=3, ge=0, le=10)  # 临时 API 故障重试次数。
+    llm_retry_base_seconds: float = Field(default=1.0, ge=0)  # 指数退避基础等待秒数。
+    llm_retry_max_seconds: float = Field(default=8.0, ge=0)  # 本地退避最大等待秒数。
+    llm_retry_jitter_seconds: float = Field(default=0.5, ge=0)  # 退避随机抖动上限。
+    llm_max_continuations: int = Field(default=2, ge=0, le=5)  # 输出截断后的最大续写次数。

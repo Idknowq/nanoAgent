@@ -37,6 +37,16 @@ class ApprovalLevel(StrEnum):
     PUBLISH = "publish"
 
 
+class LLMStopReason(StrEnum):
+    """Provider-independent reason why one LLM response stopped."""
+
+    TOOL_USE = "tool_use"
+    END_TURN = "end_turn"
+    MAX_TOKENS = "max_tokens"
+    CONTENT_FILTER = "content_filter"
+    UNKNOWN = "unknown"
+
+
 class ToolCallRecord(BaseModel):
     """一次工具调用的结构化记录，用于审计和上下文压缩。"""
 
@@ -83,7 +93,9 @@ class LLMResponse(BaseModel):
 
     content: str = ""  # LLM 返回的文本内容。
     tool_uses: list[ToolUseRequest] = Field(default_factory=list)  # LLM 请求调用的工具列表。
-    stop_reason: Literal["tool_use", "end_turn"] = "end_turn"  # 本轮停止原因。
+    stop_reason: LLMStopReason = LLMStopReason.END_TURN  # 规范化后的本轮停止原因。
+    provider_stop_reason: str | None = None  # Provider 返回的原始停止原因。
+    truncated_tool_call: bool = False  # 截断响应是否包含无法完整解析的工具调用。
     provider: str | None = None  # 实际响应对应的 provider。
     model: str | None = None  # 实际响应对应的模型名。
     usage: LLMUsage | None = None  # provider 返回的 token 使用量。

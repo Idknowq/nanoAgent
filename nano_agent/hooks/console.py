@@ -34,6 +34,9 @@ class ConsoleEvent(BaseModel):
     model: str | None = None  # LLM 模型名。
     stop_reason: str | None = None  # LLM 停止原因。
     requested_tool_count: int = 0  # LLM 请求的工具数量。
+    attempt_type: str = "primary"  # primary、transient、continuation 或 reactive。
+    attempt_index: int = 0  # 当前恢复类型内的尝试序号。
+    retry_delay_seconds: float | None = None  # transient 请求前等待时间。
     input_tokens: int | None = None  # LLM 输入 token 数。
     output_tokens: int | None = None  # LLM 输出 token 数。
     cached_tokens: int | None = None  # LLM 缓存命中 token 数。
@@ -73,8 +76,19 @@ class RichConsoleRenderer:
 
     def render_event(self, event: ConsoleEvent) -> None:
         if event.type == ConsoleEventType.LLM_STARTED:
+            attempt = ""
+            if event.attempt_type != "primary":
+                attempt = f" {event.attempt_type} {event.attempt_index}"
+            delay = (
+                f" after {event.retry_delay_seconds:.2f}s"
+                if event.retry_delay_seconds is not None
+                else ""
+            )
             self.console.print(
-                Text(f"● LLM {event.step}/{event.max_steps} request", style="bold cyan")
+                Text(
+                    f"● LLM {event.step}/{event.max_steps}{attempt} request{delay}",
+                    style="bold cyan",
+                )
             )
             return
         if event.type == ConsoleEventType.LLM_COMPLETED:
@@ -147,6 +161,9 @@ class ConsoleProgressHook(NoOpHook):
         self._render_event(
             context,
             ConsoleEventType.LLM_STARTED,
+            attempt_type=context.current_llm_attempt_type,
+            attempt_index=context.current_llm_attempt_index,
+            retry_delay_seconds=context.current_llm_retry_delay_seconds,
         )
         return None
 
@@ -225,6 +242,9 @@ class ConsoleProgressHook(NoOpHook):
         model: str | None = None,
         stop_reason: str | None = None,
         requested_tool_count: int = 0,
+        attempt_type: str = "primary",
+        attempt_index: int = 0,
+        retry_delay_seconds: float | None = None,
         input_tokens: int | None = None,
         output_tokens: int | None = None,
         cached_tokens: int | None = None,
@@ -243,6 +263,9 @@ class ConsoleProgressHook(NoOpHook):
             model=model,
             stop_reason=stop_reason,
             requested_tool_count=requested_tool_count,
+            attempt_type=attempt_type,
+            attempt_index=attempt_index,
+            retry_delay_seconds=retry_delay_seconds,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cached_tokens=cached_tokens,

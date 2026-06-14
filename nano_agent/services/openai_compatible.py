@@ -7,7 +7,14 @@ from typing import Any
 from openai import OpenAI
 
 from nano_agent.config import AgentConfig
-from nano_agent.models import AgentMessage, LLMResponse, LLMUsage, ToolUseRequest
+from nano_agent.models import (
+    AgentMessage,
+    LLMResponse,
+    LLMStopReason,
+    LLMUsage,
+    ToolUseRequest,
+)
+from nano_agent.services.errors import LLMErrorKind, LLMServiceError, normalize_llm_error
 from nano_agent.services.registry import register_llm_provider
 from nano_agent.tools.base import ToolSpec
 
@@ -34,26 +41,41 @@ class OpenAICompatibleLLMClient:
         )
 
     def complete(self, messages: list[AgentMessage], tools: list[ToolSpec]) -> LLMResponse:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=self._to_openai_messages(messages),  # type: ignore
-            tools=self._to_openai_tools(tools),  # type: ignore
-        )
-        message = response.choices[0].message
-        tool_uses = [
-            ToolUseRequest(
-                id=tool_call.id,
-                name=tool_call.function.name,  # type: ignore
-                input=json.loads(tool_call.function.arguments or "{}"),  # type: ignore
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=self._to_openai_messages(messages),  # type: ignore
+                tools=self._to_openai_tools(tools),  # type: ignore
             )
-            for tool_call in message.tool_calls or []
-        ]
+        except Exception as exc:
+            raise normalize_llm_error(exc) from exc
+
+        if not response.choices:
+            raise LLMServiceError(
+                "provider response did not contain any choices",
+                kind=LLMErrorKind.INVALID_RESPONSE,
+            )
+        choice = response.choices[0]
+        message = choice.message
+        provider_stop_reason = str(getattr(choice, "finish_reason", "") or "")
+        stop_reason = self._normalize_stop_reason(provider_stop_reason)
+        tool_uses, truncated_tool_call = self._parse_tool_calls(
+            message.tool_calls or [],
+            stop_reason=stop_reason,
+        )
+        if tool_uses and stop_reason not in {
+            LLMStopReason.MAX_TOKENS,
+            LLMStopReason.CONTENT_FILTER,
+        }:
+            stop_reason = LLMStopReason.TOOL_USE
         usage = getattr(response, "usage", None)
         prompt_details = getattr(usage, "prompt_tokens_details", None)
         return LLMResponse(
             content=message.content or "",
             tool_uses=tool_uses,
-            stop_reason="tool_use" if tool_uses else "end_turn",
+            stop_reason=stop_reason,
+            provider_stop_reason=provider_stop_reason or None,
+            truncated_tool_call=truncated_tool_call,
             provider=self.provider,
             model=getattr(response, "model", None) or self.model,
             usage=LLMUsage(
@@ -65,6 +87,48 @@ class OpenAICompatibleLLMClient:
             if usage is not None
             else None,
         )
+
+    @staticmethod
+    def _normalize_stop_reason(provider_reason: str) -> LLMStopReason:
+        return {
+            "tool_calls": LLMStopReason.TOOL_USE,
+            "function_call": LLMStopReason.TOOL_USE,
+            "stop": LLMStopReason.END_TURN,
+            "length": LLMStopReason.MAX_TOKENS,
+            "max_tokens": LLMStopReason.MAX_TOKENS,
+            "content_filter": LLMStopReason.CONTENT_FILTER,
+        }.get(provider_reason.lower(), LLMStopReason.UNKNOWN)
+
+    @staticmethod
+    def _parse_tool_calls(
+        tool_calls: list[Any],
+        *,
+        stop_reason: LLMStopReason,
+    ) -> tuple[list[ToolUseRequest], bool]:
+        parsed: list[ToolUseRequest] = []
+        for tool_call in tool_calls:
+            try:
+                input_data = json.loads(tool_call.function.arguments or "{}")
+            except (json.JSONDecodeError, TypeError) as exc:
+                if stop_reason == LLMStopReason.MAX_TOKENS:
+                    return [], True
+                raise LLMServiceError(
+                    "provider returned invalid tool call arguments",
+                    kind=LLMErrorKind.INVALID_RESPONSE,
+                ) from exc
+            if not isinstance(input_data, dict):
+                raise LLMServiceError(
+                    "provider tool call arguments must decode to an object",
+                    kind=LLMErrorKind.INVALID_RESPONSE,
+                )
+            parsed.append(
+                ToolUseRequest(
+                    id=tool_call.id,
+                    name=tool_call.function.name,
+                    input=input_data,
+                )
+            )
+        return parsed, False
 
     def _to_openai_messages(self, messages: list[AgentMessage]) -> list[dict[str, Any]]:
         converted: list[dict[str, Any]] = []

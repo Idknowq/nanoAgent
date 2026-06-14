@@ -35,6 +35,15 @@ class CompactionRecord(BaseModel):
     error_message: str | None = None  # 摘要失败或压缩无效时的错误说明。
 
 
+class CompactionOutcome(BaseModel):
+    """Messages and size evidence produced by one reactive compaction."""
+
+    messages: list[AgentMessage]
+    before_estimated_tokens: int
+    after_estimated_tokens: int
+    reduced: bool
+
+
 class ContextSizeEstimator:
     """Estimate request size without depending on a provider tokenizer."""
 
@@ -288,9 +297,15 @@ class ContextCompactor:
         self,
         messages: list[AgentMessage],
         tools: list[ToolSpec],
-    ) -> list[AgentMessage]:
+    ) -> CompactionOutcome:
         if self.reactive_compact_attempts >= self.config.max_reactive_compactions:
-            return messages
+            estimated = self.estimator.estimate(messages, tools)
+            return CompactionOutcome(
+                messages=messages,
+                before_estimated_tokens=estimated,
+                after_estimated_tokens=estimated,
+                reduced=False,
+            )
         self.reactive_compact_attempts += 1
         before = self.estimator.estimate(messages, tools)
         transcript = self.store.write_transcript(
@@ -324,7 +339,12 @@ class ContextCompactor:
             )
         )
         self.store.save_checkpoint(compacted)
-        return compacted
+        return CompactionOutcome(
+            messages=compacted,
+            before_estimated_tokens=before,
+            after_estimated_tokens=after,
+            reduced=after < before,
+        )
 
     def can_reactive_compact(self) -> bool:
         return self.reactive_compact_attempts < self.config.max_reactive_compactions
@@ -504,32 +524,3 @@ class ContextCompactor:
     @staticmethod
     def _copy_messages(messages: list[AgentMessage]) -> list[AgentMessage]:
         return [message.model_copy(deep=True) for message in messages]
-
-
-def is_prompt_too_long_error(error: Exception) -> bool:
-    """Return whether a provider error represents context-window exhaustion."""
-
-    code = getattr(error, "code", None)
-    if code is None:
-        body = getattr(error, "body", None)
-        if isinstance(body, dict):
-            nested_error = body.get("error")
-            nested_code = nested_error.get("code") if isinstance(nested_error, dict) else None
-            code = body.get("code") or nested_code
-    if str(code).lower() in {
-        "context_length_exceeded",
-        "max_context_window",
-        "prompt_is_too_long",
-        "prompt_too_long",
-    }:
-        return True
-    message = str(error).lower()
-    markers = (
-        "context_length_exceeded",
-        "maximum context length",
-        "max_context_window",
-        "prompt is too long",
-        "prompt_too_long",
-        "too many tokens",
-    )
-    return any(marker in message for marker in markers)

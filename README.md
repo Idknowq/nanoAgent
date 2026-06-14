@@ -21,6 +21,11 @@ The active conversation is bounded by tool-result persistence, structural trimmi
 micro-compaction, LLM-generated summaries, and a one-shot prompt-too-long fallback. The raw
 protocol stream remains available in each run's `messages.jsonl`.
 
+LLM requests normalize provider stop reasons and errors. Transient rate-limit, overload,
+timeout, and connection failures use bounded exponential backoff with jitter. Output-limit
+responses request bounded continuation, while prompt-too-long failures receive one reactive
+compaction retry and then fail without further emergency compaction.
+
 Runs terminate through the structured `finish_run` tool. The validated user-facing result is
 written to `.nano/runs/<run_id>/report.md`; the terminal prints only concise progress and the
 report path, not the report body or full run summary.

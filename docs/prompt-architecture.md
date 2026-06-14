@@ -86,9 +86,25 @@ Before each main LLM request, `ContextCompactor` applies this ordered pipeline:
 5. `reactive_compact`: after a provider prompt-too-long error, retain the stable prefix and
    recent messages, then retry the main LLM request once.
 
+If reactive compaction does not reduce the estimated request size, the retry is skipped. If
+the provider still reports prompt-too-long after the one reactive retry, the run fails; there
+is no emergency compaction stage.
+
 `context_checkpoint.json` stores the latest active context. `messages.jsonl` remains the raw
 append-only source of truth. `transcripts/`, `tool-results/`, and `compactions.jsonl` are
 created when their corresponding mechanisms run.
+
+## LLM request recovery
+
+Provider finish reasons are normalized as `tool_use`, `end_turn`, `max_tokens`,
+`content_filter`, or `unknown`. A `max_tokens` response is persisted as partial assistant
+output and followed by a bounded continuation request. Partial tool-call JSON is never joined;
+the model must regenerate the complete tool call.
+
+Rate-limit, overload, timeout, and connection failures retry within the same Agent step using
+bounded exponential backoff and jitter, with `Retry-After` taking precedence when available.
+Authentication, invalid-request, invalid-response, and unknown failures are not retried.
+Every physical request has its own LLM call id and metrics record with its recovery type.
 
 ## Completion protocol
 

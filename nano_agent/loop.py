@@ -2,21 +2,26 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from nano_agent.config import AgentConfig
-from nano_agent.context.compactor import ContextCompactor, is_prompt_too_long_error
+from nano_agent.context.compactor import ContextCompactor
 from nano_agent.hooks.base import AgentHook, HookResult
 from nano_agent.models import (
     AgentMessage,
     CompletionReport,
+    LLMResponse,
+    LLMStopReason,
     RunStatus,
     RunSummary,
     ToolCallRecord,
 )
 from nano_agent.persistence.message_store import MessageStore
 from nano_agent.services.llm import LLMClient
-from nano_agent.tools.base import ToolContext, ToolRegistry, ToolResult
+from nano_agent.services.errors import LLMErrorKind, LLMServiceError, normalize_llm_error
+from nano_agent.services.retry import RetryPolicy
+from nano_agent.tools.base import ToolContext, ToolRegistry, ToolResult, ToolSpec
 from nano_agent.tools.finish_run import FinishRunTool
 
 
@@ -32,6 +37,8 @@ class AgentLoop:
         hooks: list[AgentHook] | None = None,
         message_store: MessageStore | None = None,
         compactor: ContextCompactor | None = None,
+        retry_policy: RetryPolicy | None = None,
+        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         self.config = config  # 保存最大步数等循环控制配置。
         self.llm = llm  # 保存当前使用的 LLM 客户端。
@@ -40,6 +47,12 @@ class AgentLoop:
         self.hooks = hooks or []  # 保存 loop 扩展点列表。
         self.message_store = message_store  # 保存未压缩的完整协议消息流。
         self.compactor = compactor  # LLM 调用前的上下文压缩管线，可为空。
+        self.retry_policy = retry_policy or RetryPolicy(
+            base_seconds=config.llm_retry_base_seconds,
+            max_seconds=config.llm_retry_max_seconds,
+            jitter_seconds=config.llm_retry_jitter_seconds,
+        )
+        self.sleeper = sleeper
 
     def run(self, run: RunSummary, initial_messages: list[AgentMessage]) -> RunSummary:
         messages = list(initial_messages)
@@ -57,46 +70,11 @@ class AgentLoop:
                 summary_calls = self.compactor.summary_llm_call_count
                 messages = self.compactor.prepare(messages, tool_specs)
                 run.llm_call_count += self.compactor.summary_llm_call_count - summary_calls
-            retry_index = 0
-            while True:
-                suffix = "" if retry_index == 0 else f"-retry-{retry_index}"
-                self.context.current_llm_call_id = (
-                    f"llm-{self.context.current_step}{suffix}"
-                )
-                self.context.current_llm_started_at = None
-                self.context.current_llm_duration_seconds = None
-                deferred_hook_messages: list[AgentMessage] = []
-                started: float | None = None
-                run.llm_call_count += 1
-                try:
-                    for hook in self.hooks:
-                        self._append_hook_messages_to_conversation(
-                            messages,
-                            hook.before_llm_call(self.context, messages, tool_specs),
-                        )
-                    self.context.current_llm_started_at = datetime.now(timezone.utc)
-                    started = time.monotonic()
-                    response = self.llm.complete(messages=messages, tools=tool_specs)
-                    self.context.current_llm_duration_seconds = time.monotonic() - started
-                    for hook in self.hooks:
-                        self._append_hook_messages(
-                            deferred_hook_messages,
-                            hook.after_llm_call(self.context, response),
-                        )
-                    break
-                except Exception as exc:
-                    if started is not None:
-                        self.context.current_llm_duration_seconds = time.monotonic() - started
-                    for hook in self.hooks:
-                        hook.on_error(self.context, exc)
-                    if (
-                        self.compactor is None
-                        or not is_prompt_too_long_error(exc)
-                        or not self.compactor.can_reactive_compact()
-                    ):
-                        raise
-                    messages = self.compactor.reactive_compact(messages, tool_specs)
-                    retry_index += 1
+            response, messages, deferred_hook_messages = self._call_llm_with_recovery(
+                run,
+                messages,
+                tool_specs,
+            )
 
             self._append_messages(
                 messages,
@@ -109,7 +87,7 @@ class AgentLoop:
                 ],
             )
 
-            if response.stop_reason == "end_turn":
+            if response.stop_reason == LLMStopReason.END_TURN:
                 self._append_messages(messages, deferred_hook_messages)
                 if not self.tools.contains(FinishRunTool.name):
                     run.status = RunStatus.COMPLETED
@@ -135,6 +113,18 @@ class AgentLoop:
                 run.status = RunStatus.FAILED
                 run.completion_report = self._protocol_failure_report(
                     "The model ended twice without a valid finish_run tool call."
+                )
+                run.messages = messages
+                return run
+
+            if response.stop_reason in {
+                LLMStopReason.CONTENT_FILTER,
+                LLMStopReason.UNKNOWN,
+            }:
+                self._append_messages(messages, deferred_hook_messages)
+                run.status = RunStatus.FAILED
+                run.completion_report = self._protocol_failure_report(
+                    f"LLM response stopped with {response.stop_reason.value}."
                 )
                 run.messages = messages
                 return run
@@ -243,6 +233,164 @@ class AgentLoop:
         )
         run.messages = messages
         return run
+
+    def _call_llm_with_recovery(
+        self,
+        run: RunSummary,
+        messages: list[AgentMessage],
+        tool_specs: list[ToolSpec],
+    ) -> tuple[LLMResponse, list[AgentMessage], list[AgentMessage]]:
+        transient_retries = 0
+        continuation_count = 0
+        reactive_used = False
+        attempt_type = "primary"
+        attempt_index = 0
+        recovered_from: str | None = None
+        retry_delay: float | None = None
+
+        while True:
+            try:
+                response, deferred = self._perform_llm_request(
+                    run,
+                    messages,
+                    tool_specs,
+                    attempt_type=attempt_type,
+                    attempt_index=attempt_index,
+                    recovered_from=recovered_from,
+                    retry_delay=retry_delay,
+                )
+            except LLMServiceError as exc:
+                failed_call_id = self.context.current_llm_call_id
+                if exc.retryable and transient_retries < self.config.llm_max_transient_retries:
+                    transient_retries += 1
+                    retry_delay = self.retry_policy.delay_seconds(exc, transient_retries)
+                    self.sleeper(retry_delay)
+                    attempt_type = "transient"
+                    attempt_index = transient_retries
+                    recovered_from = failed_call_id
+                    continue
+                if (
+                    exc.kind == LLMErrorKind.PROMPT_TOO_LONG
+                    and not reactive_used
+                    and self.compactor is not None
+                    and self.compactor.can_reactive_compact()
+                ):
+                    outcome = self.compactor.reactive_compact(messages, tool_specs)
+                    reactive_used = True
+                    if not outcome.reduced:
+                        raise LLMServiceError(
+                            "reactive compact did not reduce estimated context size "
+                            f"({outcome.before_estimated_tokens} -> "
+                            f"{outcome.after_estimated_tokens} tokens)",
+                            kind=LLMErrorKind.PROMPT_TOO_LONG,
+                            status_code=exc.status_code,
+                        ) from exc
+                    messages = outcome.messages
+                    attempt_type = "reactive"
+                    attempt_index = 1
+                    recovered_from = failed_call_id
+                    retry_delay = None
+                    continue
+                raise
+
+            if response.stop_reason != LLMStopReason.MAX_TOKENS:
+                return response, messages, deferred
+
+            truncated_call_id = self.context.current_llm_call_id
+            self._append_messages(
+                messages,
+                [AgentMessage(role="assistant", content=response.content)],
+            )
+            self._append_messages(messages, deferred)
+            if continuation_count >= self.config.llm_max_continuations:
+                raise LLMServiceError(
+                    "LLM output remained truncated after "
+                    f"{self.config.llm_max_continuations} continuation request(s)",
+                    kind=LLMErrorKind.OUTPUT_TRUNCATED,
+                )
+
+            continuation_count += 1
+            self._append_messages(
+                messages,
+                [
+                    AgentMessage(
+                        role="system",
+                        content=self._continuation_prompt(response),
+                    )
+                ],
+            )
+            attempt_type = "continuation"
+            attempt_index = continuation_count
+            recovered_from = truncated_call_id
+            retry_delay = None
+
+    def _perform_llm_request(
+        self,
+        run: RunSummary,
+        messages: list[AgentMessage],
+        tool_specs: list[ToolSpec],
+        *,
+        attempt_type: str,
+        attempt_index: int,
+        recovered_from: str | None,
+        retry_delay: float | None,
+    ) -> tuple[LLMResponse, list[AgentMessage]]:
+        self.context.current_llm_call_id = self._llm_call_id(attempt_type, attempt_index)
+        self.context.current_llm_started_at = None
+        self.context.current_llm_duration_seconds = None
+        self.context.current_llm_attempt_type = attempt_type
+        self.context.current_llm_attempt_index = attempt_index
+        self.context.current_llm_recovered_from = recovered_from
+        self.context.current_llm_retry_delay_seconds = retry_delay
+        deferred: list[AgentMessage] = []
+
+        for hook in self.hooks:
+            self._append_hook_messages_to_conversation(
+                messages,
+                hook.before_llm_call(self.context, messages, tool_specs),
+            )
+
+        run.llm_call_count += 1
+        self.context.current_llm_started_at = datetime.now(timezone.utc)
+        started = time.monotonic()
+        try:
+            response = self.llm.complete(messages=messages, tools=tool_specs)
+        except Exception as exc:
+            self.context.current_llm_duration_seconds = time.monotonic() - started
+            normalized = normalize_llm_error(exc)
+            for hook in self.hooks:
+                hook.on_error(self.context, normalized)
+            if normalized is exc:
+                raise
+            raise normalized from exc
+
+        self.context.current_llm_duration_seconds = time.monotonic() - started
+        for hook in self.hooks:
+            self._append_hook_messages(
+                deferred,
+                hook.after_llm_call(self.context, response),
+            )
+        return response, deferred
+
+    def _llm_call_id(self, attempt_type: str, attempt_index: int) -> str:
+        base = f"llm-{self.context.current_step}"
+        if attempt_type == "primary":
+            return base
+        return f"{base}-{attempt_type}-{attempt_index}"
+
+    @staticmethod
+    def _continuation_prompt(response: LLMResponse) -> str:
+        if response.truncated_tool_call or response.tool_uses:
+            return (
+                "The previous response was truncated while producing a tool call. "
+                "Do not continue or reuse partial JSON. Regenerate the complete tool call "
+                "as a new call, without repeating completed prose."
+            )
+        return (
+            "The previous response was truncated by the output token limit. Continue from "
+            "where it stopped without repeating completed content. Complete the current "
+            "action or submit finish_run."
+        )
 
     def _validate_completion(
         self,

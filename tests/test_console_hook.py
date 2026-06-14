@@ -197,6 +197,27 @@ def test_rich_console_renderer_outputs_events_and_sections() -> None:
     ]
 
 
+def test_rich_console_renderer_labels_recovery_attempts() -> None:
+    output = StringIO()
+    renderer = RichConsoleRenderer(
+        Console(file=output, color_system=None, force_terminal=False, width=120)
+    )
+
+    renderer.render_event(
+        ConsoleEvent(
+            type=ConsoleEventType.LLM_STARTED,
+            run_id="run-1",
+            step=1,
+            max_steps=20,
+            attempt_type="transient",
+            attempt_index=2,
+            retry_delay_seconds=2.5,
+        )
+    )
+
+    assert output.getvalue().strip() == "● LLM 1/20 transient 2 request after 2.50s"
+
+
 def test_permission_rejection_renders_error_without_tool_running(tmp_path: Path) -> None:
     renderer = RecordingRenderer()
     console_hook = ConsoleProgressHook(renderer=renderer)

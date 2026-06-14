@@ -7,13 +7,14 @@ from pydantic import BaseModel
 
 from nano_agent.hooks.base import HookResult, NoOpHook
 from nano_agent.models import AgentMessage, LLMResponse
+from nano_agent.services.errors import LLMServiceError
 from nano_agent.tools.base import ToolContext, ToolSpec
 
 
 class LLMCallRecord(BaseModel):
     """Metadata for one LLM request without duplicating conversation content."""
 
-    schema_version: int = 1  # LLM 调用记录的数据结构版本。
+    schema_version: int = 2  # LLM 调用记录的数据结构版本。
     timestamp: datetime  # LLM 请求开始时间。
     run_id: str  # 调用所属的 Agent 运行标识。
     llm_call_id: str  # 当前运行内的 LLM 调用标识。
@@ -23,6 +24,11 @@ class LLMCallRecord(BaseModel):
     duration_seconds: float  # LLM 请求耗时。
     success: bool  # LLM 请求是否成功返回。
     stop_reason: str | None  # 成功响应的停止原因。
+    provider_stop_reason: str | None  # Provider 返回的原始停止原因。
+    attempt_type: str  # primary、transient、continuation 或 reactive。
+    attempt_index: int  # 当前恢复类型内的尝试序号。
+    recovered_from_call_id: str | None  # 当前调用恢复自哪个失败或截断调用。
+    retry_delay_seconds: float | None  # 当前 transient 调用前的等待时间。
     request_message_count: int  # 请求上下文中的消息数量。
     available_tool_count: int  # 请求中提供给模型的工具数量。
     requested_tool_call_count: int  # 响应中模型请求的工具调用数量。
@@ -31,6 +37,8 @@ class LLMCallRecord(BaseModel):
     total_tokens: int | None  # 本次调用消耗的 token 总数。
     cached_tokens: int | None  # 输入 token 中命中缓存的数量。
     error_type: str | None  # 失败时的异常类型。
+    error_kind: str | None  # 规范化后的 LLM 错误分类。
+    status_code: int | None  # Provider HTTP 状态码。
     error_message: str | None  # 失败时的截断异常信息。
 
 
@@ -78,6 +86,11 @@ class LLMMetricsHook(NoOpHook):
                 duration_seconds=context.current_llm_duration_seconds or 0.0,
                 success=True,
                 stop_reason=response.stop_reason,
+                provider_stop_reason=response.provider_stop_reason,
+                attempt_type=context.current_llm_attempt_type,
+                attempt_index=context.current_llm_attempt_index,
+                recovered_from_call_id=context.current_llm_recovered_from,
+                retry_delay_seconds=context.current_llm_retry_delay_seconds,
                 request_message_count=self._request_message_count,
                 available_tool_count=self._available_tool_count,
                 requested_tool_call_count=len(response.tool_uses),
@@ -86,6 +99,8 @@ class LLMMetricsHook(NoOpHook):
                 total_tokens=usage.total_tokens if usage else None,
                 cached_tokens=usage.cached_tokens if usage else None,
                 error_type=None,
+                error_kind=None,
+                status_code=None,
                 error_message=None,
             ),
         )
@@ -98,6 +113,7 @@ class LLMMetricsHook(NoOpHook):
         if context.current_llm_started_at is None:
             self._pending_call_id = None
             return None
+        service_error = error if isinstance(error, LLMServiceError) else None
         self._write(
             context,
             LLMCallRecord(
@@ -110,6 +126,11 @@ class LLMMetricsHook(NoOpHook):
                 duration_seconds=context.current_llm_duration_seconds or 0.0,
                 success=False,
                 stop_reason=None,
+                provider_stop_reason=None,
+                attempt_type=context.current_llm_attempt_type,
+                attempt_index=context.current_llm_attempt_index,
+                recovered_from_call_id=context.current_llm_recovered_from,
+                retry_delay_seconds=context.current_llm_retry_delay_seconds,
                 request_message_count=self._request_message_count,
                 available_tool_count=self._available_tool_count,
                 requested_tool_call_count=0,
@@ -118,6 +139,8 @@ class LLMMetricsHook(NoOpHook):
                 total_tokens=None,
                 cached_tokens=None,
                 error_type=type(error).__name__,
+                error_kind=service_error.kind if service_error else None,
+                status_code=service_error.status_code if service_error else None,
                 error_message=str(error)[:2_000],
             ),
         )

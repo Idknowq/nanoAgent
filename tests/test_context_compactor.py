@@ -207,7 +207,8 @@ def test_reactive_compact_keeps_prefix_and_recent_messages(tmp_path: Path) -> No
     ]
     store.append_many(messages)
 
-    prepared = compactor.reactive_compact(messages, [])
+    outcome = compactor.reactive_compact(messages, [])
+    prepared = outcome.messages
 
     assert prepared[0:2] == messages[0:2]
     assert "Reactive compact applied" in prepared[2].content
@@ -216,4 +217,6 @@ def test_reactive_compact_keeps_prefix_and_recent_messages(tmp_path: Path) -> No
         "message-8",
         "message-9",
     ]
+    assert outcome.reduced
+    assert outcome.after_estimated_tokens < outcome.before_estimated_tokens
     assert compactor.can_reactive_compact() is False

@@ -2,7 +2,10 @@ from types import SimpleNamespace
 
 from openai import OpenAI
 
-from nano_agent.models import AgentMessage
+import pytest
+
+from nano_agent.models import AgentMessage, LLMStopReason
+from nano_agent.services.errors import LLMErrorKind, LLMServiceError, normalize_llm_error
 from nano_agent.services.openai_compatible import OpenAICompatibleLLMClient
 from nano_agent.tools.base import ToolRegistry
 from nano_agent.tools.todo import TodoWriteTool
@@ -23,7 +26,7 @@ class FakeCompletions:
             ),
         )
         message = SimpleNamespace(content=None, tool_calls=[tool_call])
-        choice = SimpleNamespace(message=message)
+        choice = SimpleNamespace(message=message, finish_reason="tool_calls")
         usage = SimpleNamespace(
             prompt_tokens=12,
             completion_tokens=5,
@@ -49,6 +52,7 @@ def test_openai_compatible_client_parses_tool_calls() -> None:
     response = client.complete([AgentMessage(role="user", content="start")], tools)
 
     assert response.stop_reason == "tool_use"
+    assert response.provider_stop_reason == "tool_calls"
     assert response.tool_uses[0].name == "todo_write"
     assert response.tool_uses[0].input["title"] == "Inspect"
     assert response.model == "deepseek-test"
@@ -78,3 +82,56 @@ def test_openai_message_conversion_preserves_assistant_tool_calls() -> None:
     converted = client._to_openai_messages([message])  # noqa: SLF001
 
     assert converted[0]["tool_calls"][0]["function"]["name"] == "todo_write"
+
+
+@pytest.mark.parametrize(
+    ("provider_reason", "expected"),
+    [
+        ("stop", LLMStopReason.END_TURN),
+        ("tool_calls", LLMStopReason.TOOL_USE),
+        ("length", LLMStopReason.MAX_TOKENS),
+        ("content_filter", LLMStopReason.CONTENT_FILTER),
+        ("unexpected", LLMStopReason.UNKNOWN),
+    ],
+)
+def test_openai_stop_reason_mapping(provider_reason: str, expected: LLMStopReason) -> None:
+    assert OpenAICompatibleLLMClient._normalize_stop_reason(provider_reason) == expected  # noqa: SLF001
+
+
+def test_openai_client_marks_truncated_invalid_tool_call() -> None:
+    tool_call = SimpleNamespace(
+        id="call_1",
+        function=SimpleNamespace(name="todo_write", arguments='{"action":'),
+    )
+    parsed, truncated = OpenAICompatibleLLMClient._parse_tool_calls(  # noqa: SLF001
+        [tool_call],
+        stop_reason=LLMStopReason.MAX_TOKENS,
+    )
+
+    assert parsed == []
+    assert truncated
+
+
+@pytest.mark.parametrize(
+    ("status_code", "message", "expected"),
+    [
+        (429, "rate limited", LLMErrorKind.RATE_LIMIT),
+        (529, "overloaded", LLMErrorKind.OVERLOADED),
+        (503, "unavailable", LLMErrorKind.OVERLOADED),
+        (401, "unauthorized", LLMErrorKind.AUTHENTICATION),
+        (400, "maximum context length exceeded", LLMErrorKind.PROMPT_TOO_LONG),
+        (400, "invalid request", LLMErrorKind.INVALID_REQUEST),
+    ],
+)
+def test_llm_error_normalization(
+    status_code: int,
+    message: str,
+    expected: LLMErrorKind,
+) -> None:
+    error = RuntimeError(message)
+    error.status_code = status_code  # type: ignore[attr-defined]
+
+    normalized = normalize_llm_error(error)
+
+    assert isinstance(normalized, LLMServiceError)
+    assert normalized.kind == expected

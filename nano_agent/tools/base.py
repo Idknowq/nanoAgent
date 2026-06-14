@@ -65,6 +65,10 @@ class ToolContext(BaseModel):
     current_llm_call_id: str | None = None  # 当前步骤的 LLM 调用 id，关联消息和审计记录。
     current_llm_started_at: datetime | None = None  # 当前 LLM 调用开始时间。
     current_llm_duration_seconds: float | None = None  # 当前 LLM 调用耗时。
+    current_llm_attempt_type: str = "primary"  # primary、transient、continuation 或 reactive。
+    current_llm_attempt_index: int = 0  # 当前恢复类型内的尝试序号。
+    current_llm_recovered_from: str | None = None  # 当前调用恢复自哪个 LLM 调用。
+    current_llm_retry_delay_seconds: float | None = None  # 临时故障重试前等待时间。
 
 
 class ToolInput(BaseModel):
