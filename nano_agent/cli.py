@@ -36,6 +36,15 @@ def run(
         int,
         typer.Option("--max-steps", min=1, help="Maximum agent execution steps."),
     ] = default_config.max_steps,
+    background_idle_wait_timeout: Annotated[
+        float,
+        typer.Option(
+            "--background-idle-wait-timeout",
+            min=0.1,
+            max=120,
+            help="Seconds to wait when only active background Jobs remain.",
+        ),
+    ] = default_config.background_idle_wait_timeout_seconds,
     allow_command: Annotated[
         bool,
         typer.Option("--allow-command", help="Allow risky command execution."),
@@ -57,6 +66,7 @@ def run(
     config = AgentConfig(
         workspace_root=workdir,
         max_steps=max_steps,
+        background_idle_wait_timeout_seconds=background_idle_wait_timeout,
         allow_command=allow_command,
         allow_write=allow_write,
         llm_provider=llm,

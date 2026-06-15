@@ -3,7 +3,7 @@
 `nanoAgent` is a lightweight AI Agent prototype for repository diagnosis and small-scope code repair.
 
 Current phase: guarded tool-use loops with run persistence, cache-oriented prompt composition,
-and synchronous one-level subagent delegation.
+and bounded one-level subagent delegation.
 
 Planned MVP loop:
 
@@ -34,15 +34,24 @@ The main Agent can call `delegate_task` to run one scoped task in a child `Agent
 receives only the delegated task and explicit context, has independent messages, counters,
 compaction state, hooks, and persistence, and can use only a reconstructible subset of the
 parent's tools. Child lifecycle and results are stored under
-`.nano/runs/<run_id>/subagents/<subagent_id>/`. The current MVP executes one child
-synchronously and forbids recursive delegation; parallel scheduling and running-task
-cancellation are not implemented.
+`.nano/runs/<run_id>/subagents/<subagent_id>/`.
+
+Delegation can run synchronously or as a background Job. Background Jobs use a bounded
+in-process supervisor, default to at most two concurrent read-only subagents, and expose
+`delegated_task_get`, `delegated_task_list`, and `delegated_task_cancel`. Terminal results are
+injected into the parent conversation once. When the main Agent tries to finish while Jobs
+remain active, the runtime waits briefly for any Job to complete before the next model turn.
+Cancellation is cooperative at Agent loop boundaries; an already-running LLM request or tool
+call is allowed to return before the child stops. Recursive delegation, concurrent child
+writes, process-restart recovery, and distributed scheduling are not implemented.
 
 The main Agent also has persistent `task_create`, `task_get`, `task_list`, and `task_update`
 tools. Tasks are stored under `.nano/runs/<run_id>/tasks/`, support validated lifecycle
 transitions and `blocked_by` dependencies, and automatically unblock dependency-blocked tasks
 when all prerequisites complete. This task state is distinct from the short-lived `todo_write`
-checklist. Task execution remains manual and synchronous in the current MVP.
+checklist. A background Job may reference one Task and automatically update its execution
+status. Cancelling one Job returns an in-progress Task to `pending`; it does not cancel the
+Task itself.
 
 ## Setup
 
@@ -65,3 +74,6 @@ During early development, use:
 python -m nano_agent.cli run https://github.com/example/repo \
   "Inspect the repository, repair verified defects, and run relevant tests."
 ```
+
+Set `--background-idle-wait-timeout` to control how long the runtime waits for any
+background Job when no foreground progress is available. The default is 30 seconds.

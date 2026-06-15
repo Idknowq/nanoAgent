@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from pydantic import Field
 
 from nano_agent.models import ApprovalLevel, CompletionReport, TerminalRunStatus
@@ -36,8 +38,19 @@ class FinishRunTool(RuntimeTool):
     input_model = FinishRunInput
     input_schema = FinishRunInput.model_json_schema()
 
+    def __init__(self, active_jobs_provider: Callable[[], bool] | None = None) -> None:
+        self.active_jobs_provider = active_jobs_provider  # 查询当前主运行是否仍有后台 Job。
+
     def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         del context
+        if self.active_jobs_provider is not None and self.active_jobs_provider():
+            return ToolResult.failure(
+                code="background_jobs_active",
+                message=(
+                    "Cannot finish while background jobs are queued, running, "
+                    "or awaiting cancellation."
+                ),
+            )
         report = CompletionReport.model_validate(input_data)
         return ToolResult(
             success=True,

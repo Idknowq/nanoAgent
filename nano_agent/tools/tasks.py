@@ -126,7 +126,8 @@ class TaskUpdateTool(RuntimeTool):
     description = (
         "Keep a persistent task accurate as work progresses. Mark it in_progress before work "
         "and completed, failed, blocked, or cancelled immediately after the outcome; include "
-        "a concise result or error when applicable."
+        "a concise result or error when applicable. Do not update execution fields for a Task "
+        "linked to a background Job; the runtime manages those fields."
     )  # 工具说明。
     approval_level = ApprovalLevel.READ  # Task 元数据写入不修改目标工作区。
     category = "task"  # 工具所属功能分类。

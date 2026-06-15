@@ -5,17 +5,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from nano_agent.config import AgentConfig
+from nano_agent.background.cancellation import AgentCancelledError, CancellationToken
 from nano_agent.context.compactor import CompactionStore, ContextCompactor
 from nano_agent.hooks.base import AgentHook
 from nano_agent.hooks.registry import build_default_hooks
 from nano_agent.loop import AgentLoop, AgentLoopLimitError
-from nano_agent.models import RunStatus, RunSummary
+from nano_agent.models import ApprovalLevel, RunStatus, RunSummary
 from nano_agent.persistence.message_store import MessageStore
 from nano_agent.persistence.summary_store import SummaryStore
 from nano_agent.services.llm import LLMClient
 from nano_agent.subagents.context import SubagentContextBuilder
 from nano_agent.subagents.models import (
     SubagentErrorKind,
+    PreparedSubagent,
     SubagentRequest,
     SubagentResult,
     SubagentState,
@@ -40,6 +42,7 @@ class SubagentManager:
         context_builder: SubagentContextBuilder | None = None,
         store: SubagentStore | None = None,
         summary_store: SummaryStore | None = None,
+        llm_factory: Callable[[], LLMClient] | None = None,
     ) -> None:
         self.config = config  # 保存子 Agent 的额度和恢复配置。
         self.llm = llm  # 复用父运行配置的 LLM 客户端。
@@ -48,6 +51,13 @@ class SubagentManager:
         self.child_tool_names = (
             build_default_tool_registry(parent_context).names()
         )  # 保存隔离子环境可重新构造的工具名称。
+        self.background_tool_names = {
+            spec.name
+            for spec in parent_tools.specs()
+            if spec.approval_level == ApprovalLevel.READ
+            and spec.category == "filesystem"
+            and not spec.is_mutating
+        } & self.child_tool_names  # 保存后台模式允许使用的只读仓库工具。
         self.hooks_factory = hooks_factory or (
             lambda: build_default_hooks(config)
         )  # 为每个子 Agent 创建独立 hook 实例。
@@ -56,8 +66,12 @@ class SubagentManager:
         )  # 构造不包含父消息历史的子上下文。
         self.store = store or SubagentStore()  # 持久化子 Agent 状态和生命周期事件。
         self.summary_store = summary_store or SummaryStore()  # 持久化子运行执行摘要。
+        self.llm_factory = llm_factory or (lambda: self.llm)  # 为每个子运行提供 LLM 客户端。
 
     def run(self, request: SubagentRequest) -> SubagentResult:
+        return self.execute(self.prepare(request))
+
+    def prepare(self, request: SubagentRequest) -> PreparedSubagent:
         self._validate_request(request)
         subagent_id = self.store.next_id(self.parent_context.run_dir)
         run_id = f"{self.parent_context.run_id}-{subagent_id}"
@@ -76,7 +90,7 @@ class SubagentManager:
             run_id=run_id,
             repo_url=self.parent_context.repo_url,
             workspace_path=self.parent_context.workspace_path,
-            status=RunStatus.RUNNING,
+            status=RunStatus.PENDING,
             artifacts={
                 "messages": "messages.jsonl",
                 "state": "subagent.json",
@@ -84,33 +98,111 @@ class SubagentManager:
                 "summary": "summary.json",
             },
         )
+        return PreparedSubagent(
+            request=request,
+            run=run,
+            run_dir=str(run_dir),
+            allowed_tools=tuple(sorted(allowed_tools)),
+            state=state,
+        )
+
+    def validate_background_request(self, request: SubagentRequest) -> None:
+        names = set(request.allowed_tools or self.config.subagent_default_tools)
+        denied = names - self.background_tool_names
+        if denied:
+            raise ValueError(
+                "Background subagents can use only read-only filesystem tools: "
+                + ", ".join(sorted(denied))
+            )
+
+    def execute(
+        self,
+        prepared: PreparedSubagent,
+        cancellation_token: CancellationToken | None = None,
+    ) -> SubagentResult:
+        run = prepared.run
+        state = prepared.state
+        run_dir = Path(prepared.run_dir)
+        if state.status != SubagentStatus.CREATED:
+            raise ValueError(f"Subagent is not executable from status {state.status.value}")
+        if cancellation_token is not None and cancellation_token.cancelled:
+            return self.cancel(prepared)
+
+        run.status = RunStatus.RUNNING
         state.transition(SubagentStatus.RUNNING)
         state.started_at = datetime.now(timezone.utc)
         self.store.save(run_dir, state)
 
         try:
-            result = self._execute(request, run, run_dir, allowed_tools, subagent_id)
+            result = self._execute(
+                prepared.request,
+                run,
+                run_dir,
+                set(prepared.allowed_tools),
+                state.subagent_id,
+                cancellation_token,
+            )
         except AgentLoopLimitError as exc:
             run.status = RunStatus.FAILED
             run.notes.append(str(exc))
             result = self._failure_result(
                 run,
-                subagent_id,
+                state.subagent_id,
                 run_dir,
                 SubagentErrorKind.LLM_CALL_LIMIT,
                 str(exc),
+            )
+        except AgentCancelledError as exc:
+            run.status = RunStatus.CANCELLED
+            run.notes.append(str(exc))
+            result = SubagentResult(
+                subagent_id=state.subagent_id,
+                parent_run_id=self.parent_context.run_id,
+                status=SubagentStatus.CANCELLED,
+                error_kind=SubagentErrorKind.CANCELLED,
+                error=str(exc),
+                steps_used=run.steps,
+                llm_calls_used=run.llm_call_count,
+                run_dir=str(run_dir),
             )
         except Exception as exc:  # noqa: BLE001 - delegation must not terminate the parent loop.
             run.status = RunStatus.FAILED
             run.notes.append(f"{type(exc).__name__}: {exc}")
             result = self._failure_result(
                 run,
-                subagent_id,
+                state.subagent_id,
                 run_dir,
                 SubagentErrorKind.EXECUTION_ERROR,
                 f"{type(exc).__name__}: {exc}",
             )
 
+        return self._finalize(prepared, result)
+
+    def cancel(self, prepared: PreparedSubagent) -> SubagentResult:
+        if prepared.state.status != SubagentStatus.CREATED:
+            raise ValueError(
+                f"Only a created subagent can be cancelled before execution: "
+                f"{prepared.state.status.value}"
+            )
+        prepared.run.status = RunStatus.CANCELLED
+        result = SubagentResult(
+            subagent_id=prepared.state.subagent_id,
+            parent_run_id=self.parent_context.run_id,
+            status=SubagentStatus.CANCELLED,
+            error_kind=SubagentErrorKind.CANCELLED,
+            error="Background job was cancelled before execution.",
+            run_dir=prepared.run_dir,
+        )
+        return self._finalize(prepared, result)
+
+    def _finalize(
+        self,
+        prepared: PreparedSubagent,
+        result: SubagentResult,
+    ) -> SubagentResult:
+        run = prepared.run
+        state = prepared.state
+        run_dir = Path(prepared.run_dir)
         state.transition(result.status)
         finished_at = datetime.now(timezone.utc)
         state.finished_at = finished_at
@@ -152,6 +244,7 @@ class SubagentManager:
         run_dir: Path,
         allowed_tools: set[str],
         subagent_id: str,
+        cancellation_token: CancellationToken | None,
     ) -> SubagentResult:
         child_config = self.config.model_copy(update={"max_steps": request.max_steps})
         context = ToolContext(
@@ -170,9 +263,10 @@ class SubagentManager:
             allowed_tools | {FinishRunTool.name}
         )
         message_store = MessageStore(run_dir)
+        child_llm = self.llm_factory()
         compactor = ContextCompactor(
             config=child_config,
-            llm=self.llm,
+            llm=child_llm,
             store=CompactionStore(run.run_id, run_dir, message_store),
             repo_url=context.repo_url,
             workspace_path=context.workspace_path,
@@ -180,7 +274,7 @@ class SubagentManager:
         hooks: list[AgentHook] = self.hooks_factory()
         loop = AgentLoop(
             config=child_config,
-            llm=self.llm,
+            llm=child_llm,
             tools=registry,
             context=context,
             hooks=hooks,
@@ -188,6 +282,7 @@ class SubagentManager:
             compactor=compactor,
             max_llm_calls=request.max_llm_calls,
             reserve_final_step=True,
+            cancellation_token=cancellation_token,
         )
         completed = loop.run(run, self.context_builder.build(request))
         return self._result_from_run(completed, context.subagent_id or "unknown", run_dir)

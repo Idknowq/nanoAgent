@@ -1,8 +1,11 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import pytest
 
+from nano_agent.background.cancellation import CancellationToken
 from nano_agent.config import AgentConfig
 from nano_agent.models import LLMResponse, ToolUseRequest
 from nano_agent.subagents.manager import SubagentManager
@@ -17,6 +20,7 @@ from nano_agent.tools.delegate_task import DelegateTaskTool
 from nano_agent.tools.grep import GrepTool
 from nano_agent.tools.list_files import ListFilesTool
 from nano_agent.tools.read_file import ReadFileTool
+from nano_agent.tools.run_command import RunCommandTool
 
 
 class SuccessfulSubagentLLM:
@@ -181,6 +185,17 @@ class BlockedSubagentLLM:
         )
 
 
+class BlockingSubagentLLM:
+    def __init__(self) -> None:
+        self.entered = Event()  # 标记子 Agent 已进入一次物理 LLM 调用。
+        self.release = Event()  # 允许测试在发出取消请求后释放 LLM 调用。
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        self.entered.set()
+        self.release.wait(timeout=2)
+        return LLMResponse(content="late response", stop_reason="end_turn")
+
+
 def make_parent_context(tmp_path: Path, config: AgentConfig) -> ToolContext:
     return ToolContext(
         run_id="parent-run",
@@ -258,6 +273,28 @@ def test_subagent_has_isolated_messages_tools_and_counters(tmp_path: Path) -> No
     assert "llm-7" not in sent_content
     assert parent_context.current_step == 7
     assert parent_context.current_llm_call_id == "llm-7"
+
+
+def test_subagent_prepare_and_execute_share_one_lifecycle(tmp_path: Path) -> None:
+    manager, _ = make_manager(tmp_path, SuccessfulSubagentLLM())
+    prepared = manager.prepare(
+        SubagentRequest(
+            task="Inspect files.",
+            allowed_tools=("read_file",),
+            max_steps=3,
+            max_llm_calls=3,
+        )
+    )
+
+    assert prepared.state.status == SubagentStatus.CREATED
+    assert json.loads(
+        (Path(prepared.run_dir) / "subagent.json").read_text(encoding="utf-8")
+    )["status"] == "created"
+
+    result = manager.execute(prepared)
+
+    assert result.status == SubagentStatus.SUCCEEDED
+    assert prepared.state.status == SubagentStatus.SUCCEEDED
 
 
 def test_subagent_persists_lifecycle_and_result(tmp_path: Path) -> None:
@@ -368,6 +405,58 @@ def test_subagent_manager_enforces_configured_budgets(tmp_path: Path) -> None:
                 max_llm_calls=3,
             )
         )
+
+
+def test_background_subagent_rejects_non_read_only_tool(tmp_path: Path) -> None:
+    config = AgentConfig(
+        workspace_root=tmp_path,
+        runs_root=tmp_path / "runs",
+        console_progress_enabled=False,
+        llm_calls_enabled=False,
+        audit_enabled=False,
+    )
+    context = make_parent_context(tmp_path, config)
+    manager = SubagentManager(
+        config=config,
+        llm=SuccessfulSubagentLLM(),  # type: ignore[arg-type]
+        parent_context=context,
+        parent_tools=ToolRegistry([ReadFileTool(), RunCommandTool()]),
+        hooks_factory=lambda: [],
+    )
+    request = SubagentRequest(
+        task="Run a command.",
+        allowed_tools=("run_command",),
+        max_steps=3,
+        max_llm_calls=3,
+    )
+
+    with pytest.raises(ValueError, match="read-only filesystem"):
+        manager.validate_background_request(request)
+
+
+def test_running_subagent_stops_after_cancellation_boundary(tmp_path: Path) -> None:
+    llm = BlockingSubagentLLM()
+    manager, _ = make_manager(tmp_path, llm)
+    prepared = manager.prepare(
+        SubagentRequest(
+            task="Inspect files.",
+            allowed_tools=("read_file",),
+            max_steps=3,
+            max_llm_calls=3,
+        )
+    )
+    token = CancellationToken()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(manager.execute, prepared, token)
+        assert llm.entered.wait(timeout=1)
+        token.cancel()
+        llm.release.set()
+        result = future.result(timeout=1)
+
+    assert result.status == SubagentStatus.CANCELLED
+    assert result.error_kind == SubagentErrorKind.CANCELLED
+    assert prepared.state.status == SubagentStatus.CANCELLED
 
 
 def test_subagent_llm_call_limit_returns_structured_failure(tmp_path: Path) -> None:
@@ -511,5 +600,6 @@ def test_delegate_task_returns_structured_subagent_result(tmp_path: Path) -> Non
     assert result.success
     assert result.data["subagent_result"]["status"] == "succeeded"
     assert result.data["subagent_result"]["parent_run_id"] == "parent-run"
-    assert "completion_report" not in result.data["subagent_result"]
-    assert result.data["subagent_result"]["result_path"] == "result.json"
+    assert result.data["subagent_result"]["completion_report"]["status"] == "completed"
+    assert "run_dir" not in result.data["subagent_result"]
+    assert "result_path" not in result.data["subagent_result"]

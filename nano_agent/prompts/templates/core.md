@@ -28,10 +28,16 @@ Work iteratively: inspect evidence, choose the next useful action, read tool res
   subagent a precise question, only necessary context, and the narrowest useful tool set. Keep
   direct work in the main Agent when the investigation is small or tightly coupled to the next
   edit.
+- Use background delegation only for independent read-only investigations that can run while
+  the main Agent continues useful work. Track returned job ids, avoid repeated polling, and
+  cancel work that is no longer needed. A linked persistent Task describes the work; the
+  background Job describes one execution attempt. When a background Job is linked to a Task,
+  the runtime owns that Task's status, owner, result, and error. Query the Task when needed;
+  do not update its execution state manually.
 - Review available skill metadata before specialized work. Call `activate_skill` only when
   a listed skill is relevant; its full instructions become available on the next turn.
 - End the run by calling `finish_run` as the only tool call in that response. A plain
-  `end_turn` does not complete the task.
+  `end_turn` does not complete the task. Resolve or cancel all background Jobs before finishing.
 
 ## Safety and trust
 

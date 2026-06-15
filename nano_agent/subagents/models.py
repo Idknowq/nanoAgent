@@ -5,7 +5,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
-from nano_agent.models import CompletionReport
+from nano_agent.models import CompletionReport, RunSummary
 
 
 class SubagentStatus(StrEnum):
@@ -23,6 +23,7 @@ class SubagentErrorKind(StrEnum):
     LLM_CALL_LIMIT = "llm_call_limit"  # 子 Agent 超过 LLM 调用预算。
     INVALID_REQUEST = "invalid_request"  # 委派请求参数或权限无效。
     EXECUTION_ERROR = "execution_error"  # 子 Agent 发生未分类执行错误。
+    CANCELLED = "cancelled"  # 子 Agent 收到合作式取消请求。
 
 
 class SubagentRequest(BaseModel):
@@ -92,3 +93,13 @@ class SubagentLifecycleEvent(BaseModel):
     subagent_id: str  # 事件对应的子 Agent 标识。
     parent_run_id: str  # 事件对应的父运行标识。
     status: SubagentStatus  # 本次事件记录的生命周期状态。
+
+
+class PreparedSubagent(BaseModel):
+    """Persisted child run inputs prepared before synchronous or background execution."""
+
+    request: SubagentRequest  # 已通过预算和长度校验的委派请求。
+    run: RunSummary  # 当前子 Agent 对应的独立运行摘要。
+    run_dir: str  # 当前子 Agent 的持久化目录。
+    allowed_tools: tuple[str, ...]  # 当前子 Agent 实际获得的业务工具。
+    state: SubagentState  # 当前子 Agent 的生命周期快照。

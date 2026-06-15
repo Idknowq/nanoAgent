@@ -10,9 +10,13 @@ from nano_agent.models import CompletionReport, RunStatus, RunSummary
 
 
 def test_cli_max_steps_default_comes_from_agent_config() -> None:
-    parameter = inspect.signature(run).parameters["max_steps"]
+    parameters = inspect.signature(run).parameters
 
-    assert parameter.default == AgentConfig().max_steps
+    assert parameters["max_steps"].default == AgentConfig().max_steps
+    assert (
+        parameters["background_idle_wait_timeout"].default
+        == AgentConfig().background_idle_wait_timeout_seconds
+    )
 
 
 def test_cli_exposes_explicit_permission_flags() -> None:
@@ -26,11 +30,12 @@ def test_cli_exposes_explicit_permission_flags() -> None:
 
 
 def test_cli_help_uses_renamed_permission_options() -> None:
-    result = CliRunner().invoke(app, ["run", "--help"])
+    result = CliRunner().invoke(app, ["run", "--help"], terminal_width=160)
 
     assert result.exit_code == 0
     assert "--allow-command" in result.stdout
     assert "--allow-write" in result.stdout
+    assert "--background-idle-wai" in result.stdout
     assert "--auto-approve" not in result.stdout
 
 

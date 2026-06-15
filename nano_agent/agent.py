@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 
+from nano_agent.background.hook import BackgroundCompletionHook
+from nano_agent.background.store import BackgroundJobStore
+from nano_agent.background.supervisor import BackgroundJobSupervisor
 from nano_agent.config import AgentConfig
 from nano_agent.context.compactor import CompactionStore, ContextCompactor
 from nano_agent.hooks.registry import build_default_hooks
@@ -25,7 +29,13 @@ from nano_agent.tasks.service import TaskService
 from nano_agent.tasks.store import TaskStore
 from nano_agent.tools.activate_skill import ActivateSkillTool
 from nano_agent.tools.base import ToolContext, build_default_tool_registry
-from nano_agent.tools.delegate_task import DelegateTaskTool
+from nano_agent.tools.delegate_task import (
+    DelegatedTaskCancelTool,
+    DelegatedTaskGetTool,
+    DelegatedTaskListTool,
+    DelegateTaskTool,
+)
+from nano_agent.tools.finish_run import FinishRunTool
 from nano_agent.tools.tasks import TaskCreateTool, TaskGetTool, TaskListTool, TaskUpdateTool
 from nano_agent.workspace import WorkspaceManager
 
@@ -49,6 +59,7 @@ class NanoAgent:
     def run(self, repo_url: str, user_request: str) -> RunSummary:
         run = self.workspace_manager.create_run(repo_url=repo_url)
         run.status = RunStatus.RUNNING
+        supervisor: BackgroundJobSupervisor | None = None  # 当前主运行的后台调度器。
 
         try:
             workspace_path = self.workspace_manager.next_workspace_path(repo_url, run.run_id)
@@ -61,6 +72,7 @@ class NanoAgent:
                 "prompt": "prompt.json",
                 "report": "report.md",
                 "tasks": "tasks/",
+                "background_jobs": "background/jobs/",
             }
             if self.config.context_compaction_enabled:
                 run.artifacts["context_checkpoint"] = "context_checkpoint.json"
@@ -80,6 +92,11 @@ class NanoAgent:
                 max_steps=self.config.max_steps,
             )
             llm = self.llm or create_llm_client(self.config, repo_url)
+            llm_factory = (
+                partial(create_llm_client, self.config, repo_url)
+                if self.llm is None
+                else None
+            )
             tools = build_default_tool_registry(context)
             skill_registry = SkillRegistry(self._skills_root())
             skill_session = SkillSession(skill_registry)
@@ -94,21 +111,29 @@ class NanoAgent:
             tools.register(TaskGetTool(task_service))
             tools.register(TaskListTool(task_service))
             tools.register(TaskUpdateTool(task_service))
-            hooks = [
-                SkillActivationHook(skill_session),
-                *build_default_hooks(self.config),
-            ]
+            hooks = [SkillActivationHook(skill_session), *build_default_hooks(self.config)]
             if self.config.subagents_enabled:
-                tools.register(
-                    DelegateTaskTool(
-                        SubagentManager(
-                            config=self.config,
-                            llm=llm,
-                            parent_context=context,
-                            parent_tools=tools,
-                        )
-                    )
+                manager = SubagentManager(
+                    config=self.config,
+                    llm=llm,
+                    llm_factory=llm_factory,
+                    parent_context=context,
+                    parent_tools=tools,
                 )
+                supervisor = BackgroundJobSupervisor(
+                    manager=manager,
+                    store=BackgroundJobStore(run_dir),
+                    max_workers=self.config.background_max_workers,
+                    max_jobs=self.config.background_max_jobs,
+                    max_result_chars=self.config.subagent_max_result_chars,
+                    task_service=task_service,
+                )
+                tools.register(DelegateTaskTool(manager, supervisor))
+                tools.register(DelegatedTaskGetTool(supervisor))
+                tools.register(DelegatedTaskListTool(supervisor))
+                tools.register(DelegatedTaskCancelTool(supervisor))
+                tools.replace(FinishRunTool(supervisor.has_active_jobs))
+                hooks.insert(1, BackgroundCompletionHook(supervisor))
             prompt_bundle = self.prompt_assembler.assemble(
                 PromptRequest(
                     user_request=user_request,
@@ -134,6 +159,7 @@ class NanoAgent:
                 hooks=hooks,
                 message_store=message_store,
                 compactor=compactor,
+                idle_waiter=supervisor.wait_for_completion if supervisor is not None else None,
             )
             run = loop.run(run=run, initial_messages=prompt_bundle.messages)
         except Exception as exc:  # noqa: BLE001 - top-level agent boundary should capture failures.
@@ -147,6 +173,11 @@ class NanoAgent:
                 remaining_risks=["Repository work may be incomplete or unverified."],
             )
 
+        if supervisor is not None:
+            try:
+                supervisor.shutdown(cancel_active=True)
+            except Exception as exc:  # noqa: BLE001 - shutdown must not discard the main result.
+                run.notes.append(f"Background shutdown failed: {type(exc).__name__}: {exc}")
         run.finished_at = datetime.now(timezone.utc)
         if run.completion_report is None:
             run.completion_report = CompletionReport(

@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 
 from nano_agent.config import AgentConfig
+from nano_agent.background.cancellation import AgentCancelledError, CancellationToken
 from nano_agent.context.compactor import ContextCompactor
 from nano_agent.hooks.base import AgentHook, HookResult
 from nano_agent.models import (
@@ -45,6 +46,8 @@ class AgentLoop:
         sleeper: Callable[[float], None] = time.sleep,
         max_llm_calls: int | None = None,
         reserve_final_step: bool = False,
+        cancellation_token: CancellationToken | None = None,
+        idle_waiter: Callable[[float], bool] | None = None,
     ) -> None:
         self.config = config  # 保存最大步数等循环控制配置。
         self.llm = llm  # 保存当前使用的 LLM 客户端。
@@ -61,6 +64,8 @@ class AgentLoop:
         self.sleeper = sleeper
         self.max_llm_calls = max_llm_calls  # 当前 loop 允许的物理 LLM 调用上限。
         self.reserve_final_step = reserve_final_step  # 是否保留最后一步提交终止总结。
+        self.cancellation_token = cancellation_token  # 当前运行的合作式取消信号。
+        self.idle_waiter = idle_waiter  # 等待任一后台 Job 完成的运行时回调。
 
     def run(self, run: RunSummary, initial_messages: list[AgentMessage]) -> RunSummary:
         messages = list(initial_messages)
@@ -71,6 +76,7 @@ class AgentLoop:
 
         loop_iterations = self.config.max_steps + int(self.reserve_final_step)
         for step_index in range(loop_iterations):
+            self._raise_if_cancelled()
             self.context.current_step = min(step_index + 1, self.config.max_steps)
             self.context.max_steps = self.config.max_steps
             run.steps = self.context.current_step
@@ -111,6 +117,7 @@ class AgentLoop:
                     spec for spec in tool_specs if spec.name == FinishRunTool.name
                 ]
             if self.compactor is not None:
+                self._raise_if_cancelled()
                 summary_calls = self.compactor.summary_llm_call_count
                 messages = self.compactor.prepare(messages, tool_specs)
                 run.llm_call_count += self.compactor.summary_llm_call_count - summary_calls
@@ -119,6 +126,7 @@ class AgentLoop:
                 messages,
                 tool_specs,
             )
+            self._raise_if_cancelled()
 
             self._append_messages(
                 messages,
@@ -192,6 +200,7 @@ class AgentLoop:
                 len(response.tool_uses) == 1
                 and response.tool_uses[0].name == FinishRunTool.name
             )
+            round_tool_results: list[tuple[str, ToolResult]] = []
             for tool_use in response.tool_uses:
                 if finalization_step and tool_use.name != FinishRunTool.name:
                     result = ToolResult.failure(
@@ -224,6 +233,7 @@ class AgentLoop:
                             )
                         ],
                     )
+                    round_tool_results.append((tool_use.name, result))
                     continue
                 try:
                     tool = self.tools.get(tool_use.name)
@@ -255,10 +265,12 @@ class AgentLoop:
                             )
                         ],
                     )
+                    round_tool_results.append((tool_use.name, result))
                     continue
                 started = time.monotonic()
                 completion_report: CompletionReport | None = None
                 try:
+                    self._raise_if_cancelled()
                     for hook in self.hooks:
                         self._append_hook_messages(
                             deferred_hook_messages,
@@ -282,6 +294,7 @@ class AgentLoop:
                                 duration,
                             ),
                         )
+                    self._raise_if_cancelled()
                 except Exception as exc:
                     for hook in self.hooks:
                         hook.on_error(self.context, exc)
@@ -297,6 +310,7 @@ class AgentLoop:
                         success=result.success,
                     )
                 )
+                round_tool_results.append((tool.name, result))
                 self._append_messages(
                     messages,
                     [
@@ -307,6 +321,13 @@ class AgentLoop:
                         )
                     ],
                 )
+                if (
+                    isinstance(tool, FinishRunTool)
+                    and finish_is_exclusive
+                    and result.error_code == "background_jobs_active"
+                    and self.idle_waiter is not None
+                ):
+                    self._idle_wait(messages)
                 if completion_report is not None:
                     self._append_messages(messages, deferred_hook_messages)
                     run.completion_report = completion_report
@@ -314,6 +335,8 @@ class AgentLoop:
                     run.messages = messages
                     return run
 
+            if self._only_active_background_queries(round_tool_results):
+                self._idle_wait(messages)
             self._append_messages(messages, deferred_hook_messages)
             run.messages = messages
 
@@ -386,7 +409,7 @@ class AgentLoop:
                 if exc.retryable and transient_retries < self.config.llm_max_transient_retries:
                     transient_retries += 1
                     retry_delay = self.retry_policy.delay_seconds(exc, transient_retries)
-                    self.sleeper(retry_delay)
+                    self._sleep(retry_delay)
                     attempt_type = "transient"
                     attempt_index = transient_retries
                     recovered_from = failed_call_id
@@ -469,6 +492,7 @@ class AgentLoop:
         self.context.current_llm_recovered_from = recovered_from
         self.context.current_llm_retry_delay_seconds = retry_delay
         deferred: list[AgentMessage] = []
+        self._raise_if_cancelled()
 
         for hook in self.hooks:
             self._append_hook_messages_to_conversation(
@@ -481,6 +505,8 @@ class AgentLoop:
         started = time.monotonic()
         try:
             response = self.llm.complete(messages=messages, tools=tool_specs)
+        except AgentCancelledError:
+            raise
         except Exception as exc:
             self.context.current_llm_duration_seconds = time.monotonic() - started
             normalized = normalize_llm_error(exc)
@@ -496,7 +522,59 @@ class AgentLoop:
                 deferred,
                 hook.after_llm_call(self.context, response),
             )
+        self._raise_if_cancelled()
         return response, deferred
+
+    def _raise_if_cancelled(self) -> None:
+        if self.cancellation_token is not None:
+            self.cancellation_token.raise_if_cancelled()
+
+    def _sleep(self, delay_seconds: float) -> None:
+        if self.cancellation_token is None:
+            self.sleeper(delay_seconds)
+            return
+        if self.cancellation_token.wait(delay_seconds):
+            self.cancellation_token.raise_if_cancelled()
+
+    def _idle_wait(self, messages: list[AgentMessage]) -> None:
+        if self.idle_waiter is None:
+            return
+        completed = self.idle_waiter(self.config.background_idle_wait_timeout_seconds)
+        if completed:
+            return
+        self._append_messages(
+            messages,
+            [
+                AgentMessage(
+                    role="system",
+                    content=(
+                        "Background jobs are still active after the runtime idle wait. "
+                        "Continue useful foreground work if available. Do not poll their "
+                        "status repeatedly."
+                    ),
+                )
+            ],
+        )
+
+    @staticmethod
+    def _only_active_background_queries(
+        tool_results: list[tuple[str, ToolResult]],
+    ) -> bool:
+        query_tools = {"delegated_task_get", "delegated_task_list"}
+        active_statuses = {"queued", "running", "cancel_requested"}
+        if not tool_results or any(
+            name not in query_tools or not result.success for name, result in tool_results
+        ):
+            return False
+        jobs: list[dict] = []
+        for _, result in tool_results:
+            job = result.data.get("background_job")
+            if isinstance(job, dict):
+                jobs.append(job)
+            listed = result.data.get("background_jobs")
+            if isinstance(listed, list):
+                jobs.extend(item for item in listed if isinstance(item, dict))
+        return any(job.get("status") in active_statuses for job in jobs)
 
     def _llm_call_id(self, attempt_type: str, attempt_index: int) -> str:
         base = f"llm-{self.context.current_step}"

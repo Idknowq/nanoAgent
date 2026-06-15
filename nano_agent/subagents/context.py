@@ -21,7 +21,10 @@ class SubagentContextBuilder:
                     "cat, pwd, or Python search scripts when structured tools cover the work. "
                     "After a rejected operation, change strategy instead of retrying it. "
                     "Do not delegate to another agent. Do not claim actions or evidence you "
-                    "did not observe. Finish by calling finish_run as the only tool call."
+                    "did not observe. In finish_run, make resolution a self-contained statement "
+                    "of the actual findings, not a statement that a summary was generated. Put "
+                    "supporting evidence in verification_summary and preserve material risks. "
+                    "Finish by calling finish_run as the only tool call."
                 ),
             )
         ]

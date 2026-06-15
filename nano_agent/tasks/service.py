@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from threading import RLock
 
 from nano_agent.tasks.errors import TaskError
 from nano_agent.tasks.models import TaskBlockedReason, TaskRecord, TaskStatus
@@ -12,6 +13,7 @@ class TaskService:
 
     def __init__(self, store: TaskStore) -> None:
         self.store = store  # 保存当前主运行的 Task 持久化接口。
+        self._lock = RLock()  # 串行化 Task 的读取、状态转换和依赖解锁。
 
     def create(
         self,
@@ -19,6 +21,20 @@ class TaskService:
         subject: str,
         description: str,
         blocked_by: tuple[str, ...] = (),
+    ) -> TaskRecord:
+        with self._lock:
+            return self._create(
+                subject=subject,
+                description=description,
+                blocked_by=blocked_by,
+            )
+
+    def _create(
+        self,
+        *,
+        subject: str,
+        description: str,
+        blocked_by: tuple[str, ...],
     ) -> TaskRecord:
         task_id = self.store.next_id()  # 为新 Task 分配的持久化递增标识。
         dependencies = self._normalize_dependencies(task_id, blocked_by)
@@ -35,13 +51,15 @@ class TaskService:
         return task
 
     def get(self, task_id: str) -> TaskRecord:
-        return self.store.get(task_id)
+        with self._lock:
+            return self.store.get(task_id)
 
     def list(self, status: TaskStatus | None = None) -> list[TaskRecord]:
-        tasks = self.store.list()
-        if status is None:
-            return tasks
-        return [task for task in tasks if task.status == status]
+        with self._lock:
+            tasks = self.store.list()
+            if status is None:
+                return tasks
+            return [task for task in tasks if task.status == status]
 
     def update(
         self,
@@ -54,6 +72,30 @@ class TaskService:
         owner: str | None = None,
         result: str | None = None,
         error: str | None = None,
+    ) -> TaskRecord:
+        with self._lock:
+            return self._update(
+                task_id,
+                subject=subject,
+                description=description,
+                status=status,
+                blocked_by=blocked_by,
+                owner=owner,
+                result=result,
+                error=error,
+            )
+
+    def _update(
+        self,
+        task_id: str,
+        *,
+        subject: str | None,
+        description: str | None,
+        status: TaskStatus | None,
+        blocked_by: tuple[str, ...] | None,
+        owner: str | None,
+        result: str | None,
+        error: str | None,
     ) -> TaskRecord:
         task = self.store.get(task_id)
         updates = (subject, description, status, blocked_by, owner, result, error)
@@ -112,6 +154,7 @@ class TaskService:
                 TaskStatus.CANCELLED,
             },
             TaskStatus.IN_PROGRESS: {
+                TaskStatus.PENDING,
                 TaskStatus.COMPLETED,
                 TaskStatus.FAILED,
                 TaskStatus.BLOCKED,

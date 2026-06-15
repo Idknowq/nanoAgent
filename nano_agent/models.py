@@ -17,6 +17,7 @@ class RunStatus(StrEnum):
     COMPLETED = "completed"
     BLOCKED = "blocked"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 TerminalRunStatus: TypeAlias = Literal[

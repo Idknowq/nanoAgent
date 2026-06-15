@@ -12,7 +12,7 @@ class AgentConfig(BaseModel):
     runs_root: Path = Field(default=Path(".nano/runs"))  # 每次运行摘要 JSON 的保存目录。
     llm_provider: str = "deepseek"  # 生产运行默认使用 DeepSeek。
     llm_model: str | None = None  # LLM 模型名；为空时由 provider 默认值决定。
-    max_steps: int = Field(default=70, ge=1)  # Agent 最大执行步数，防止后续 planner 死循环。
+    max_steps: int = Field(default=100, ge=1)  # Agent 最大执行步数，防止后续 planner 死循环。
     command_timeout_seconds: int = Field(default=120, ge=1)  # 单个 shell 命令的超时时间。
     execution_isolation_enabled: bool = True  # 是否启用 run 级命令执行环境隔离。
     python_executable: Path | None = None  # 创建隔离 Python 环境时使用的解释器。
@@ -29,7 +29,7 @@ class AgentConfig(BaseModel):
     memory_path: Path | None = None  # 可选的跨运行 JSONL memory 文件。
     memory_limit: int = Field(default=5, ge=0, le=20)  # 初始 prompt 最多注入的 memory 数量。
     context_compaction_enabled: bool = True  # 是否启用 LLM 调用前上下文压缩管线。
-    tool_result_budget_chars: int = Field(default=200_000, ge=1)  # 单轮工具结果字符预算。
+    tool_result_budget_chars: int = Field(default=8000, ge=1)  # 单轮工具结果字符预算。
     tool_result_preview_chars: int = Field(default=2_000, ge=0)  # 大结果落盘后的预览长度。
     snip_compact_ratio: float = Field(default=0.5, gt=0, le=1)  # snip 的可用 token 阈值比例。
     snip_keep_head: int = Field(default=5, ge=1)  # snip 时保留的头部消息数。
@@ -58,3 +58,10 @@ class AgentConfig(BaseModel):
         "grep",
         "read_file",
     )  # 未显式指定时授予子 Agent 的只读工具。
+    background_max_workers: int = Field(default=2, ge=1, le=8)  # 后台子 Agent 最大并发数。
+    background_max_jobs: int = Field(default=8, ge=1, le=32)  # 同时存在的非终态 Job 上限。
+    background_idle_wait_timeout_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        le=120,
+    )  # 主 Agent 无前台工作时等待任一后台完成事件的最大秒数。

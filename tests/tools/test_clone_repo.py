@@ -51,6 +51,7 @@ def test_clone_repo_clones_and_returns_repository_metadata(tmp_path: Path, monke
     assert result.data["commit"] == "abc123"
     assert result.data["branch"] == "main"
     assert result.data["remote_url"] == REPO_URL
+    assert result.data["workspace"] == "."
     assert calls[0] == ["git", "clone", "--depth", "1", "--", REPO_URL, "."]
     assert context.workspace_path.is_dir()
 

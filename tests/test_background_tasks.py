@@ -1,0 +1,411 @@
+from __future__ import annotations
+
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from queue import Empty, Queue
+from threading import Event, Lock
+
+from nano_agent.background.cancellation import CancellationToken
+from nano_agent.background.hook import BackgroundCompletionHook
+from nano_agent.background.models import BackgroundJobStatus
+from nano_agent.background.presentation import public_subagent_result
+from nano_agent.background.store import BackgroundJobStore
+from nano_agent.background.supervisor import BackgroundJobSupervisor
+from nano_agent.config import AgentConfig
+from nano_agent.models import CompletionReport, RunStatus, RunSummary
+from nano_agent.subagents.models import (
+    PreparedSubagent,
+    SubagentErrorKind,
+    SubagentRequest,
+    SubagentResult,
+    SubagentState,
+    SubagentStatus,
+)
+from nano_agent.tasks.models import TaskStatus
+from nano_agent.tasks.service import TaskService
+from nano_agent.tasks.store import TaskStore
+from nano_agent.tools.base import ToolContext
+from nano_agent.tools.delegate_task import (
+    DelegatedTaskGetTool,
+    DelegatedTaskListTool,
+    DelegateTaskTool,
+)
+from nano_agent.tools.finish_run import FinishRunTool
+
+
+class ControlledSubagentManager:
+    """Deterministic concurrent manager used to test Supervisor behavior."""
+
+    def __init__(self) -> None:
+        self.release = Event()  # 允许测试控制所有运行中子 Agent 的完成时机。
+        self.started: Queue[str] = Queue()  # 记录实际开始执行的子 Agent。
+        self._lock = Lock()  # 串行化测试计数器。
+        self._next_id = 0  # 下一个测试子 Agent 数字序号。
+        self._active = 0  # 当前正在执行的测试子 Agent 数量。
+        self.max_active = 0  # 测试期间观察到的最大并发数。
+
+    def validate_background_request(self, request: SubagentRequest) -> None:
+        del request
+
+    def prepare(self, request: SubagentRequest) -> PreparedSubagent:
+        with self._lock:
+            self._next_id += 1
+            subagent_id = f"subagent-{self._next_id}"
+        state = SubagentState(
+            subagent_id=subagent_id,
+            parent_run_id="parent",
+            status=SubagentStatus.CREATED,
+            task=request.task,
+            allowed_tools=request.allowed_tools,
+        )
+        return PreparedSubagent(
+            request=request,
+            run=RunSummary(
+                run_id=f"parent-{subagent_id}",
+                repo_url="https://example.com/repo.git",
+            ),
+            run_dir=f"/tmp/{subagent_id}",
+            allowed_tools=request.allowed_tools,
+            state=state,
+        )
+
+    def execute(
+        self,
+        prepared: PreparedSubagent,
+        cancellation_token: CancellationToken | None = None,
+    ) -> SubagentResult:
+        with self._lock:
+            self._active += 1
+            self.max_active = max(self.max_active, self._active)
+        self.started.put(prepared.state.subagent_id)
+        try:
+            while not self.release.wait(0.01):
+                if cancellation_token is not None and cancellation_token.cancelled:
+                    return self._cancelled_result(prepared)
+            if cancellation_token is not None and cancellation_token.cancelled:
+                return self._cancelled_result(prepared)
+            return SubagentResult(
+                subagent_id=prepared.state.subagent_id,
+                parent_run_id="parent",
+                status=SubagentStatus.SUCCEEDED,
+                output=f"completed {prepared.request.task}",
+                completion_report=CompletionReport(
+                    status=RunStatus.COMPLETED,
+                    problem=prepared.request.task,
+                    root_cause="Analysis task",
+                    resolution=f"completed {prepared.request.task}",
+                    verification_summary="Reviewed relevant files.",
+                    remaining_risks=["One material risk."],
+                ),
+                run_dir=prepared.run_dir,
+            )
+        finally:
+            with self._lock:
+                self._active -= 1
+
+    def cancel(self, prepared: PreparedSubagent) -> SubagentResult:
+        return self._cancelled_result(prepared)
+
+    @staticmethod
+    def _cancelled_result(prepared: PreparedSubagent) -> SubagentResult:
+        return SubagentResult(
+            subagent_id=prepared.state.subagent_id,
+            parent_run_id="parent",
+            status=SubagentStatus.CANCELLED,
+            error_kind=SubagentErrorKind.CANCELLED,
+            error="cancelled",
+            run_dir=prepared.run_dir,
+        )
+
+
+def make_request(name: str) -> SubagentRequest:
+    return SubagentRequest(
+        task=name,
+        allowed_tools=("read_file",),
+        max_steps=3,
+        max_llm_calls=3,
+    )
+
+
+def make_supervisor(
+    tmp_path: Path,
+    manager: ControlledSubagentManager,
+    *,
+    max_workers: int = 2,
+    max_jobs: int = 8,
+    task_service: TaskService | None = None,
+) -> BackgroundJobSupervisor:
+    return BackgroundJobSupervisor(
+        manager=manager,  # type: ignore[arg-type]
+        store=BackgroundJobStore(tmp_path / "run"),
+        max_workers=max_workers,
+        max_jobs=max_jobs,
+        task_service=task_service,
+    )
+
+
+def wait_terminal(
+    supervisor: BackgroundJobSupervisor,
+    job_id: str,
+    timeout: float = 1,
+):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        job = supervisor.get(job_id)
+        if job.status in {
+            BackgroundJobStatus.SUCCEEDED,
+            BackgroundJobStatus.BLOCKED,
+            BackgroundJobStatus.FAILED,
+            BackgroundJobStatus.CANCELLED,
+        }:
+            return job
+        time.sleep(0.005)
+    raise AssertionError(f"job did not finish: {job_id}")
+
+
+def test_supervisor_runs_jobs_concurrently_with_worker_limit(tmp_path: Path) -> None:
+    manager = ControlledSubagentManager()
+    supervisor = make_supervisor(tmp_path, manager, max_workers=2)
+    first = supervisor.submit(make_request("first"))
+    second = supervisor.submit(make_request("second"))
+
+    assert {manager.started.get(timeout=1), manager.started.get(timeout=1)} == {
+        first.subagent_id,
+        second.subagent_id,
+    }
+    assert manager.max_active == 2
+
+    manager.release.set()
+    assert wait_terminal(supervisor, first.job_id).status == BackgroundJobStatus.SUCCEEDED
+    assert wait_terminal(supervisor, second.job_id).status == BackgroundJobStatus.SUCCEEDED
+    supervisor.shutdown()
+
+
+def test_supervisor_keeps_excess_job_queued(tmp_path: Path) -> None:
+    manager = ControlledSubagentManager()
+    supervisor = make_supervisor(tmp_path, manager, max_workers=1)
+    first = supervisor.submit(make_request("first"))
+    second = supervisor.submit(make_request("second"))
+
+    assert manager.started.get(timeout=1) == first.subagent_id
+    try:
+        manager.started.get(timeout=0.05)
+        second_started = True
+    except Empty:
+        second_started = False
+    assert not second_started
+    assert supervisor.get(second.job_id).status == BackgroundJobStatus.QUEUED
+
+    manager.release.set()
+    wait_terminal(supervisor, first.job_id)
+    wait_terminal(supervisor, second.job_id)
+    supervisor.shutdown()
+
+
+def test_concurrent_submissions_receive_unique_job_ids(tmp_path: Path) -> None:
+    manager = ControlledSubagentManager()
+    manager.release.set()
+    supervisor = make_supervisor(tmp_path, manager, max_workers=4, max_jobs=20)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        jobs = list(executor.map(lambda index: supervisor.submit(make_request(str(index))), range(12)))
+
+    assert len({job.job_id for job in jobs}) == 12
+    assert len({job.subagent_id for job in jobs}) == 12
+    for job in jobs:
+        wait_terminal(supervisor, job.job_id)
+    supervisor.shutdown()
+
+
+def test_queued_and_running_jobs_can_be_cancelled(tmp_path: Path) -> None:
+    manager = ControlledSubagentManager()
+    supervisor = make_supervisor(tmp_path, manager, max_workers=1)
+    running = supervisor.submit(make_request("running"))
+    manager.started.get(timeout=1)
+    queued = supervisor.submit(make_request("queued"))
+
+    assert supervisor.cancel(queued.job_id).status == BackgroundJobStatus.CANCELLED
+    running_status = supervisor.cancel(running.job_id).status
+    assert running_status in {
+        BackgroundJobStatus.CANCEL_REQUESTED,
+        BackgroundJobStatus.CANCELLED,
+    }
+    assert wait_terminal(supervisor, running.job_id).status == BackgroundJobStatus.CANCELLED
+    supervisor.shutdown()
+
+
+def test_job_completion_updates_linked_task(tmp_path: Path) -> None:
+    task_service = TaskService(TaskStore(tmp_path / "run"))
+    task = task_service.create(subject="Inspect", description="Inspect files")
+    manager = ControlledSubagentManager()
+    manager.release.set()
+    supervisor = make_supervisor(tmp_path, manager, task_service=task_service)
+
+    job = supervisor.submit(make_request("inspect"), task_id=task.task_id)
+    assert wait_terminal(supervisor, job.job_id).status == BackgroundJobStatus.SUCCEEDED
+
+    completed = task_service.get(task.task_id)
+    assert completed.status == TaskStatus.COMPLETED
+    assert completed.owner == job.job_id
+    assert completed.result == "completed inspect"
+    supervisor.shutdown()
+
+
+def test_cancelled_execution_returns_linked_task_to_pending(tmp_path: Path) -> None:
+    task_service = TaskService(TaskStore(tmp_path / "run"))
+    task = task_service.create(subject="Inspect", description="Inspect files")
+    manager = ControlledSubagentManager()
+    supervisor = make_supervisor(tmp_path, manager, task_service=task_service)
+
+    job = supervisor.submit(make_request("inspect"), task_id=task.task_id)
+    manager.started.get(timeout=1)
+    supervisor.cancel(job.job_id)
+    assert wait_terminal(supervisor, job.job_id).status == BackgroundJobStatus.CANCELLED
+    assert task_service.get(task.task_id).status == TaskStatus.PENDING
+    supervisor.shutdown()
+
+
+def test_completion_hook_delivers_terminal_event_once(tmp_path: Path) -> None:
+    manager = ControlledSubagentManager()
+    manager.release.set()
+    supervisor = make_supervisor(tmp_path, manager)
+    job = supervisor.submit(make_request("inspect"))
+    wait_terminal(supervisor, job.job_id)
+    hook = BackgroundCompletionHook(supervisor)
+
+    first = hook.before_llm_call(None, [], [])  # type: ignore[arg-type]
+    second = hook.before_llm_call(None, [], [])  # type: ignore[arg-type]
+
+    assert first is not None
+    assert job.job_id in first.injected_messages[0].content
+    assert "Reviewed relevant files." in first.injected_messages[0].content
+    assert "One material risk." in first.injected_messages[0].content
+    assert "run_dir" not in first.injected_messages[0].content
+    assert second is None
+    supervisor.shutdown()
+
+
+def test_supervisor_idle_wait_unblocks_when_any_job_completes(tmp_path: Path) -> None:
+    manager = ControlledSubagentManager()
+    supervisor = make_supervisor(tmp_path, manager)
+    supervisor.submit(make_request("inspect"))
+    manager.started.get(timeout=1)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        waiting = executor.submit(supervisor.wait_for_completion, 1)
+        manager.release.set()
+        assert waiting.result(timeout=1)
+
+    supervisor.shutdown()
+
+
+def test_querying_terminal_job_suppresses_duplicate_completion_notice(
+    tmp_path: Path,
+) -> None:
+    manager = ControlledSubagentManager()
+    manager.release.set()
+    supervisor = make_supervisor(tmp_path, manager)
+    job = supervisor.submit(make_request("inspect"))
+    wait_terminal(supervisor, job.job_id)
+    supervisor.get(job.job_id, observe=True)
+
+    result = BackgroundCompletionHook(supervisor).before_llm_call(None, [], [])  # type: ignore[arg-type]
+
+    assert result is None
+    supervisor.shutdown()
+
+
+def test_finish_run_rejects_active_background_jobs(tmp_path: Path) -> None:
+    context = ToolContext(
+        run_id="run",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "run",
+        config=AgentConfig(),
+    )
+    tool = FinishRunTool(lambda: True)
+
+    result = tool.invoke(
+        {
+            "status": RunStatus.COMPLETED,
+            "problem": "Task",
+            "root_cause": "Cause",
+            "resolution": "Resolution",
+        },
+        context,
+    )
+
+    assert not result.success
+    assert result.error_code == "background_jobs_active"
+
+
+def test_delegation_tools_submit_query_and_list_background_job(
+    tmp_path: Path,
+) -> None:
+    manager = ControlledSubagentManager()
+    manager.release.set()
+    supervisor = make_supervisor(tmp_path, manager)
+    context = ToolContext(
+        run_id="run",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "run",
+        config=AgentConfig(),
+    )
+
+    submitted = DelegateTaskTool(manager, supervisor).invoke(  # type: ignore[arg-type]
+        {
+            "task": "inspect",
+            "allowed_tools": ["read_file"],
+            "max_steps": 3,
+            "max_llm_calls": 3,
+            "run_in_background": True,
+        },
+        context,
+    )
+    job_id = submitted.data["background_job"]["job_id"]
+    wait_terminal(supervisor, job_id)
+    loaded = DelegatedTaskGetTool(supervisor).invoke({"job_id": job_id}, context)
+    listed = DelegatedTaskListTool(supervisor).invoke(
+        {"status": "succeeded"},
+        context,
+    )
+
+    assert submitted.success
+    assert loaded.data["background_job"]["job_id"] == job_id
+    assert loaded.data["background_job"]["result"]["completion_report"][
+        "verification_summary"
+    ] == "Reviewed relevant files."
+    assert loaded.data["background_job"]["result"]["completion_report"][
+        "remaining_risks"
+    ] == ["One material risk."]
+    assert "run_dir" not in loaded.data["background_job"]["result"]
+    assert [job["job_id"] for job in listed.data["background_jobs"]] == [job_id]
+    supervisor.shutdown()
+
+
+def test_public_subagent_result_enforces_configured_character_budget() -> None:
+    long_text = "x" * 10_000
+    result = SubagentResult(
+        subagent_id="subagent-1",
+        parent_run_id="parent",
+        status=SubagentStatus.SUCCEEDED,
+        output=long_text,
+        run_dir="/tmp/subagent-1",
+        completion_report=CompletionReport(
+            status=RunStatus.COMPLETED,
+            problem=long_text,
+            root_cause=long_text,
+            resolution=long_text,
+            verification_summary=long_text,
+            remaining_risks=[long_text] * 20,
+            blockers=[long_text] * 20,
+        ),
+    )
+
+    payload = public_subagent_result(result, 1_000)
+
+    assert len(json.dumps(payload, ensure_ascii=False)) <= 1_000
+    assert payload["completion_report"]["remaining_risks"]

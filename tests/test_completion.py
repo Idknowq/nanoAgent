@@ -4,7 +4,7 @@ from nano_agent.config import AgentConfig
 from nano_agent.loop import AgentLoop
 from nano_agent.models import AgentMessage, LLMResponse, RunSummary, ToolUseRequest
 from nano_agent.persistence.report_store import ReportStore
-from nano_agent.tools.base import ToolContext, ToolRegistry
+from nano_agent.tools.base import RuntimeTool, ToolContext, ToolRegistry, ToolResult
 from nano_agent.tools.finish_run import FinishRunTool
 from nano_agent.tools.todo import TodoWriteTool
 
@@ -150,6 +150,84 @@ class NonExclusiveFinishLLM:
         )
 
 
+class FinishAfterIdleWaitLLM:
+    def __init__(self) -> None:
+        self.calls = 0  # 记录等待前后两次 finish_run 请求。
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        return LLMResponse(
+            stop_reason="tool_use",
+            tool_uses=[
+                ToolUseRequest(
+                    id=f"finish-{self.calls}",
+                    name="finish_run",
+                    input={
+                        "status": "completed",
+                        "problem": "Task",
+                        "root_cause": "Cause",
+                        "resolution": "Completed after background work.",
+                    },
+                )
+            ],
+        )
+
+
+class BackgroundStatusTool(RuntimeTool):
+    name = "delegated_task_get"
+    description = "Return one background Job status."
+
+    def run(self, input_data, context):  # type: ignore[no-untyped-def]
+        del input_data, context
+        return ToolResult(
+            success=True,
+            summary="job-1 is running",
+            data={"background_job": {"job_id": "job-1", "status": "running"}},
+        )
+
+
+class PollingThenCompleteLLM:
+    def __init__(self, *, include_foreground_work: bool = False) -> None:
+        self.calls = 0  # 记录状态查询后的下一轮模型调用。
+        self.include_foreground_work = include_foreground_work  # 是否混合前台工具。
+
+    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        self.calls += 1
+        if self.calls == 1:
+            tool_uses = [
+                ToolUseRequest(
+                    id="query-job",
+                    name="delegated_task_get",
+                    input={"job_id": "job-1"},
+                )
+            ]
+            if self.include_foreground_work:
+                tool_uses.append(
+                    ToolUseRequest(
+                        id="foreground-work",
+                        name="todo_write",
+                        input={"action": "add", "title": "Continue foreground work"},
+                    )
+                )
+            return LLMResponse(stop_reason="tool_use", tool_uses=tool_uses)
+        return LLMResponse(
+            stop_reason="tool_use",
+            tool_uses=[
+                ToolUseRequest(
+                    id="finish-after-query",
+                    name="finish_run",
+                    input={
+                        "status": "completed",
+                        "problem": "Task",
+                        "root_cause": "Cause",
+                        "resolution": "Completed after checking background work.",
+                    },
+                )
+            ],
+        )
+
+
 def run_with_completion(tmp_path: Path, llm) -> RunSummary:  # type: ignore[no-untyped-def]
     """运行包含 finish_run 的最小 AgentLoop。"""
 
@@ -204,6 +282,85 @@ def test_finish_run_must_be_the_only_tool_call_and_can_be_corrected(tmp_path: Pa
     assert llm.saw_validation_error
     assert not result.tool_calls[0].success
     assert result.tool_calls[0].tool_name == "finish_run"
+
+
+def test_finish_run_enters_runtime_idle_wait_for_active_background_jobs(
+    tmp_path: Path,
+) -> None:
+    context = make_context(tmp_path)
+    context.config.background_idle_wait_timeout_seconds = 7
+    active = {"value": True}
+    waits: list[float] = []
+
+    def idle_waiter(timeout: float) -> bool:
+        waits.append(timeout)
+        active["value"] = False
+        return True
+
+    llm = FinishAfterIdleWaitLLM()
+    loop = AgentLoop(
+        config=context.config,
+        llm=llm,  # type: ignore[arg-type]
+        tools=ToolRegistry([FinishRunTool(lambda: active["value"])]),
+        context=context,
+        idle_waiter=idle_waiter,
+    )
+
+    result = loop.run(
+        RunSummary(run_id=context.run_id, repo_url=context.repo_url),
+        [AgentMessage(role="user", content="start")],
+    )
+
+    assert result.status == "completed"
+    assert waits == [7]
+    assert llm.calls == 2
+    assert [call.success for call in result.tool_calls] == [False, True]
+
+
+def test_background_status_only_round_enters_runtime_idle_wait(tmp_path: Path) -> None:
+    context = make_context(tmp_path)
+    context.config.background_idle_wait_timeout_seconds = 6
+    waits: list[float] = []
+    llm = PollingThenCompleteLLM()
+    loop = AgentLoop(
+        config=context.config,
+        llm=llm,  # type: ignore[arg-type]
+        tools=ToolRegistry([BackgroundStatusTool(), FinishRunTool()]),
+        context=context,
+        idle_waiter=lambda timeout: waits.append(timeout) or True,
+    )
+
+    result = loop.run(
+        RunSummary(run_id=context.run_id, repo_url=context.repo_url),
+        [AgentMessage(role="user", content="start")],
+    )
+
+    assert result.status == "completed"
+    assert waits == [6]
+    assert llm.calls == 2
+
+
+def test_background_query_with_foreground_work_does_not_idle(tmp_path: Path) -> None:
+    context = make_context(tmp_path)
+    waits: list[float] = []
+    llm = PollingThenCompleteLLM(include_foreground_work=True)
+    loop = AgentLoop(
+        config=context.config,
+        llm=llm,  # type: ignore[arg-type]
+        tools=ToolRegistry(
+            [BackgroundStatusTool(), TodoWriteTool(), FinishRunTool()]
+        ),
+        context=context,
+        idle_waiter=lambda timeout: waits.append(timeout) or True,
+    )
+
+    result = loop.run(
+        RunSummary(run_id=context.run_id, repo_url=context.repo_url),
+        [AgentMessage(role="user", content="start")],
+    )
+
+    assert result.status == "completed"
+    assert waits == []
 
 
 def test_report_store_renders_uniform_markdown(tmp_path: Path) -> None:

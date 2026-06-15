@@ -82,7 +82,7 @@ class CloneRepoTool(RuntimeTool):
             success=True,
             summary=f"cloned repository at commit {commit}",
             data={
-                "workspace": str(workspace),
+                "workspace": ".",
                 "commit": commit,
                 "branch": branch,
                 "remote_url": remote_url,

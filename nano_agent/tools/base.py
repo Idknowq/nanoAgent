@@ -149,6 +149,11 @@ class ToolRegistry:
             raise ValueError(f"Tool already registered: {tool.name}")
         self._tools[tool.name] = tool
 
+    def replace(self, tool: RuntimeTool) -> None:
+        if tool.name not in self._tools:
+            raise KeyError(f"Tool not found: {tool.name}")
+        self._tools[tool.name] = tool
+
     def get(self, name: str) -> RuntimeTool:
         if name not in self._tools:
             raise KeyError(f"Tool not found: {name}")
