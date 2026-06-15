@@ -78,7 +78,7 @@ def _classify(error: Exception, status_code: int | None, message: str) -> LLMErr
     class_name = type(error).__name__.lower()
     if status_code == 429 or "ratelimit" in class_name or "rate_limit" in class_name:
         return LLMErrorKind.RATE_LIMIT
-    if status_code in {502, 503, 504, 529}:
+    if status_code in {500, 502, 503, 504, 529}:
         return LLMErrorKind.OVERLOADED
     if "timeout" in class_name:
         return LLMErrorKind.TIMEOUT
@@ -86,7 +86,7 @@ def _classify(error: Exception, status_code: int | None, message: str) -> LLMErr
         return LLMErrorKind.CONNECTION
     if status_code in {401, 403} or "authentication" in class_name or "permission" in class_name:
         return LLMErrorKind.AUTHENTICATION
-    if status_code == 400 or "badrequest" in class_name:
+    if status_code in {400, 402, 422} or "badrequest" in class_name:
         return LLMErrorKind.INVALID_REQUEST
     return LLMErrorKind.UNKNOWN
 

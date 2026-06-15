@@ -181,7 +181,7 @@ def test_llm_metrics_hook_records_recovery_attempt_metadata(tmp_path: Path) -> N
     assert recovered["attempt_type"] == "transient"
     assert recovered["attempt_index"] == 1
     assert recovered["recovered_from_call_id"] == "llm-1"
-    assert recovered["retry_delay_seconds"] == 1
+    assert recovered["retry_delay_seconds"] == context.config.llm_retry_base_seconds
 
 
 def test_llm_metrics_hook_records_invalid_tool_call_and_recovery(

@@ -31,6 +31,7 @@ class FakeCompletions:
             prompt_tokens=12,
             completion_tokens=5,
             total_tokens=17,
+            prompt_cache_hit_tokens=3,
             prompt_tokens_details=SimpleNamespace(cached_tokens=2),
         )
         return SimpleNamespace(choices=[choice], model="deepseek-test", usage=usage)
@@ -46,7 +47,13 @@ class FakeOpenAI:
 
 def test_openai_compatible_client_parses_tool_calls() -> None:
     fake = FakeOpenAI()
-    client = OpenAICompatibleLLMClient(client=fake, model="deepseek-test")  # type: ignore[arg-type]
+    client = OpenAICompatibleLLMClient(  # type: ignore[arg-type]
+        client=fake,
+        model="deepseek-test",
+        temperature=0.0,
+        max_output_tokens=32_768,
+        thinking_enabled=False,
+    )
     tools = ToolRegistry([TodoWriteTool()]).specs()
 
     response = client.complete([AgentMessage(role="user", content="start")], tools)
@@ -58,8 +65,13 @@ def test_openai_compatible_client_parses_tool_calls() -> None:
     assert response.model == "deepseek-test"
     assert response.usage is not None
     assert response.usage.total_tokens == 17
-    assert response.usage.cached_tokens == 2
+    assert response.usage.cached_tokens == 3
     assert fake.completions.last_request["model"] == "deepseek-test"
+    assert fake.completions.last_request["temperature"] == 0.0
+    assert fake.completions.last_request["max_tokens"] == 32_768
+    assert fake.completions.last_request["extra_body"] == {
+        "thinking": {"type": "disabled"}
+    }
     assert fake.completions.last_request["tools"][0]["function"]["parameters"]["required"] == [
         "action"
     ]
@@ -132,15 +144,41 @@ def test_openai_client_records_bounded_invalid_tool_call_arguments() -> None:
     assert len(captured.value.invalid_tool_arguments_preview) == 2_000
 
 
+def test_openai_client_retries_insufficient_system_resource() -> None:
+    class ResourceLimitedCompletions:
+        def create(self, **kwargs):  # type: ignore[no-untyped-def]
+            del kwargs
+            message = SimpleNamespace(content="", tool_calls=[])
+            choice = SimpleNamespace(
+                message=message,
+                finish_reason="insufficient_system_resource",
+            )
+            return SimpleNamespace(choices=[choice], model="deepseek-test", usage=None)
+
+    fake = SimpleNamespace(
+        chat=SimpleNamespace(completions=ResourceLimitedCompletions())
+    )
+    client = OpenAICompatibleLLMClient(client=fake, model="deepseek-test")  # type: ignore[arg-type]
+
+    with pytest.raises(LLMServiceError) as captured:
+        client.complete([AgentMessage(role="user", content="start")], [])
+
+    assert captured.value.kind == LLMErrorKind.OVERLOADED
+    assert captured.value.retryable
+
+
 @pytest.mark.parametrize(
     ("status_code", "message", "expected"),
     [
         (429, "rate limited", LLMErrorKind.RATE_LIMIT),
         (529, "overloaded", LLMErrorKind.OVERLOADED),
+        (500, "server error", LLMErrorKind.OVERLOADED),
         (503, "unavailable", LLMErrorKind.OVERLOADED),
         (401, "unauthorized", LLMErrorKind.AUTHENTICATION),
         (400, "maximum context length exceeded", LLMErrorKind.PROMPT_TOO_LONG),
         (400, "invalid request", LLMErrorKind.INVALID_REQUEST),
+        (402, "insufficient balance", LLMErrorKind.INVALID_REQUEST),
+        (422, "invalid parameters", LLMErrorKind.INVALID_REQUEST),
     ],
 )
 def test_llm_error_normalization(

@@ -92,13 +92,15 @@ def test_prompt_assembler_keeps_stable_core_and_exposes_only_skill_metadata(
     assert first.available_skill_names == ["python-repository"]
     assert "Diagnose Python failures." in catalog.content
     assert body not in "\n".join(message.content for message in first.messages)
-    assert "at least two independent durable" in first.messages[0].content
-    assert "Delegate a bounded, independent, read-heavy investigation" in (
+    assert first.prompt_version == "mvp-v2"
+    assert "Persistent Tasks are optional durable work records" in first.messages[0].content
+    assert "completion notifications are injected by the runtime" in first.messages[0].content
+    assert "Prefer `list_files`, `grep`, `read_file`, and `edit_file`" in (
         first.messages[0].content
     )
-    assert "use `list_files` instead of `ls` or `find`" in first.messages[0].content
-    assert "`grep` for text or symbol search" in first.messages[0].content
     assert 'Use `"."` for the workspace root' in first.messages[0].content
+    assert "Do not weaken, delete, or bypass tests" in first.messages[0].content
+    assert "Skills are optional procedural guidance" in catalog.content
 
 
 def test_prompt_assembler_selectively_injects_memory(tmp_path: Path) -> None:
@@ -137,6 +139,24 @@ def test_skill_registry_parses_metadata_without_loading_body(tmp_path: Path) -> 
     assert descriptor.content_offset > 0
     assert loaded.content.startswith("# Instructions")
     assert loaded.content_sha256
+
+
+def test_builtin_skills_define_current_repair_workflows() -> None:
+    skill_root = Path(__file__).parents[1] / "nano_agent" / "skills" / "builtin"
+    registry = SkillRegistry(skill_root)
+
+    python_skill = registry.load("python-repository")
+    django_skill = registry.load("django-repository")
+    node_skill = registry.load("node-repository")
+    actions_skill = registry.load("github-actions")
+
+    assert python_skill.descriptor.metadata.metadata["version"] == "2.0"
+    assert "Re-run the original focused reproduction" in python_skill.content
+    assert django_skill.descriptor.metadata.metadata["version"] == "1.0"
+    assert "tests/runtests.py" in django_skill.content
+    assert "historical `ProjectState`" in django_skill.content
+    assert "Do not create or replace lockfiles" in node_skill.content
+    assert "hosted GitHub Actions run" in actions_skill.content
 
 
 def test_skill_registry_rejects_invalid_frontmatter_and_name_mismatch(tmp_path: Path) -> None:

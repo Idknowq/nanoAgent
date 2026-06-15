@@ -6,7 +6,13 @@ from nano_agent.services.registry import create_llm_client
 
 
 def test_deepseek_is_the_default_provider() -> None:
-    assert AgentConfig().llm_provider == "deepseek"
+    config = AgentConfig()
+
+    assert config.llm_provider == "deepseek"
+    assert config.llm_model == "deepseek-v4-pro"
+    assert config.llm_temperature == 0.0
+    assert config.llm_max_output_tokens == 32_768
+    assert not config.llm_thinking_enabled
 
 
 def test_scripted_client_remains_available_for_direct_test_injection() -> None:

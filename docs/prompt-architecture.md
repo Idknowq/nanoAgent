@@ -9,6 +9,8 @@ The MVP prompt layer separates stable operating policy from task-specific state:
 3. Inject skills and memory only when relevant.
 4. Keep the raw conversation append-only for recovery while compacting only the active context.
 5. Persist prompt composition metadata for debugging and reproducibility.
+6. Keep optional mechanisms such as Tasks, delegation, and skills benefit-driven rather than
+   mandatory steps.
 
 ## Message order
 
@@ -36,7 +38,8 @@ Each `SKILL.md` starts with YAML frontmatter containing at least `name` and `des
 Startup discovery reads and validates only this metadata. The body is not loaded into the
 initial prompt.
 
-The model calls `activate_skill` with a catalog name when the skill is relevant. The tool
+The model calls `activate_skill` with a catalog name when specialized procedural guidance will
+materially improve the task. Activation is optional and should happen before deep domain work. The tool
 loads the body, returns only activation metadata, and `SkillActivationHook` appends the body
 as a bounded system message after the tool result. A skill is loaded and injected at most
 once per run.
@@ -76,9 +79,9 @@ Before each main LLM request, `ContextCompactor` applies this ordered pipeline:
 
 1. `tool_result_budget`: inspect the latest tool-result batch, persist the largest results
    under `tool-results/`, and replace them only when the reference is smaller.
-2. `snip_compact`: when estimated input tokens exceed its configured share of the usable
-   context budget, keep the stable head and recent tail while preserving assistant-tool
-   protocol boundaries.
+2. `snip_compact`: when estimated input tokens approach the usable context limit, keep the stable
+   head and recent tail while preserving assistant-tool protocol boundaries. The default threshold
+   leaves automatic summarization as the normal compaction path rather than deleting history early.
 3. `micro_compact`: replace older oversized tool results with
    `[Earlier tool result compacted. Re-run if needed.]`.
 4. `compact_history`: if estimated input tokens still exceed the threshold, save a transcript

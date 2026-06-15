@@ -25,31 +25,69 @@ INVALID_TOOL_ARGUMENTS_PREVIEW_CHARS = 2_000
 class OpenAICompatibleLLMClient:
     """OpenAI API 格式的 LLM 客户端，用于 DeepSeek 等兼容服务。"""
 
-    def __init__(self, client: OpenAI, model: str, provider: str = "openai_compatible") -> None:
+    def __init__(
+        self,
+        client: OpenAI,
+        model: str,
+        provider: str = "openai_compatible",
+        *,
+        temperature: float | None = None,
+        max_output_tokens: int | None = None,
+        thinking_enabled: bool | None = None,
+    ) -> None:
         self.client = client  # 保存 OpenAI-compatible SDK 客户端。
         self.model = model  # 保存当前调用的模型名。
-        self.provider = provider
+        self.provider = provider  # 保存指标和终端展示使用的 provider 名称。
+        self.temperature = temperature  # 可选的采样温度。
+        self.max_output_tokens = max_output_tokens  # 可选的单次输出 token 上限。
+        self.thinking_enabled = thinking_enabled  # 可选的 DeepSeek 思考模式开关。
 
     @classmethod
-    def from_deepseek_env(cls, model: str | None = None) -> OpenAICompatibleLLMClient:
+    def from_deepseek_env(
+        cls,
+        *,
+        model: str | None = None,
+        temperature: float = 0.0,
+        max_output_tokens: int = 32_768,
+        thinking_enabled: bool = False,
+        request_timeout_seconds: float = 300.0,
+    ) -> OpenAICompatibleLLMClient:
         api_key = os.getenv("DEEPSEEK_API_KEY")
         base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-        model_name = model or os.getenv("DEEPSEEK_MODEL", "deepseek-pro")
+        model_name = model or os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
         if not api_key:
             raise RuntimeError("DEEPSEEK_API_KEY is not set in environment or .env")
         return cls(
-            client=OpenAI(api_key=api_key, base_url=base_url),
+            client=OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=request_timeout_seconds,
+            ),
             model=model_name,
             provider="deepseek",
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            thinking_enabled=thinking_enabled,
         )
 
     def complete(self, messages: list[AgentMessage], tools: list[ToolSpec]) -> LLMResponse:
+        request: dict[str, Any] = {
+            "model": self.model,
+            "messages": self._to_openai_messages(messages),
+            "tools": self._to_openai_tools(tools),
+        }
+        if self.temperature is not None:
+            request["temperature"] = self.temperature
+        if self.max_output_tokens is not None:
+            request["max_tokens"] = self.max_output_tokens
+        if self.thinking_enabled is not None:
+            request["extra_body"] = {
+                "thinking": {
+                    "type": "enabled" if self.thinking_enabled else "disabled",
+                }
+            }
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=self._to_openai_messages(messages),  # type: ignore
-                tools=self._to_openai_tools(tools),  # type: ignore
-            )
+            response = self.client.chat.completions.create(**request)
         except Exception as exc:
             raise normalize_llm_error(exc) from exc
 
@@ -61,6 +99,11 @@ class OpenAICompatibleLLMClient:
         choice = response.choices[0]
         message = choice.message
         provider_stop_reason = str(getattr(choice, "finish_reason", "") or "")
+        if provider_stop_reason == "insufficient_system_resource":
+            raise LLMServiceError(
+                "provider stopped generation due to insufficient system resources",
+                kind=LLMErrorKind.OVERLOADED,
+            )
         stop_reason = self._normalize_stop_reason(provider_stop_reason)
         tool_uses, truncated_tool_call = self._parse_tool_calls(
             message.tool_calls or [],
@@ -73,6 +116,9 @@ class OpenAICompatibleLLMClient:
             stop_reason = LLMStopReason.TOOL_USE
         usage = getattr(response, "usage", None)
         prompt_details = getattr(usage, "prompt_tokens_details", None)
+        cached_tokens = getattr(usage, "prompt_cache_hit_tokens", None)
+        if cached_tokens is None:
+            cached_tokens = getattr(prompt_details, "cached_tokens", None)
         return LLMResponse(
             content=message.content or "",
             tool_uses=tool_uses,
@@ -85,7 +131,7 @@ class OpenAICompatibleLLMClient:
                 input_tokens=getattr(usage, "prompt_tokens", None),
                 output_tokens=getattr(usage, "completion_tokens", None),
                 total_tokens=getattr(usage, "total_tokens", None),
-                cached_tokens=getattr(prompt_details, "cached_tokens", None),
+                cached_tokens=cached_tokens,
             )
             if usage is not None
             else None,
@@ -207,7 +253,14 @@ class OpenAICompatibleLLMClient:
 
 
 def _build_deepseek_client(config: AgentConfig, repo_url: str) -> OpenAICompatibleLLMClient:
-    return OpenAICompatibleLLMClient.from_deepseek_env(model=config.llm_model)
+    del repo_url
+    return OpenAICompatibleLLMClient.from_deepseek_env(
+        model=config.llm_model,
+        temperature=config.llm_temperature,
+        max_output_tokens=config.llm_max_output_tokens,
+        thinking_enabled=config.llm_thinking_enabled,
+        request_timeout_seconds=config.llm_request_timeout_seconds,
+    )
 
 
 register_llm_provider("deepseek", _build_deepseek_client)

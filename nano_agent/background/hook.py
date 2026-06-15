@@ -32,6 +32,8 @@ class BackgroundCompletionHook(NoOpHook):
                     role="system",
                     content=(
                         "<background_job_updates>\n"
+                        "These Jobs reached terminal states. Consume their included results; "
+                        "do not poll them again unless required data is missing.\n"
                         f"{json.dumps(payload, ensure_ascii=False)}\n"
                         "</background_job_updates>"
                     ),

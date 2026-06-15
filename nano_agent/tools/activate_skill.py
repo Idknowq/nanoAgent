@@ -20,7 +20,8 @@ class ActivateSkillTool(RuntimeTool):
     name = "activate_skill"
     description = (
         "Load the complete instructions for one available skill by name. "
-        "Use this after reviewing the skill metadata exposed in the system prompt."
+        "Use only when its metadata clearly matches the task and the specialized procedure "
+        "will materially improve the next actions; activation adds a model turn."
     )
     approval_level = ApprovalLevel.READ
     category = "skills"

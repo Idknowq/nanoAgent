@@ -16,9 +16,11 @@ class SummaryLLM:
 
     def __init__(self) -> None:
         self.calls = 0  # 记录摘要请求次数。
+        self.messages: list[AgentMessage] = []  # 记录最近一次摘要请求。
 
     def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
+        self.messages = list(messages)
         return LLMResponse(content="Goal and verified repository state.", stop_reason="end_turn")
 
 
@@ -186,6 +188,9 @@ def test_prepare_compacts_history_and_persists_transcript(tmp_path: Path) -> Non
 
     assert llm.calls == 1
     assert compactor.summary_llm_call_count == 1
+    assert llm.messages[0].role == "system"
+    assert "compact continuation state" in llm.messages[0].content
+    assert "Derived state:" in llm.messages[1].content
     assert prepared[0:2] == messages[0:2]
     assert "<conversation_summary>" in prepared[-1].content
     assert (store.path.parent / "context_checkpoint.json").exists()

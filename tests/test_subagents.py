@@ -269,7 +269,9 @@ def test_subagent_has_isolated_messages_tools_and_counters(tmp_path: Path) -> No
     assert llm.tool_names == [{"read_file", "finish_run"}]
     sent_content = "\n".join(message.content for message in llm.requests[0])
     assert "Inspect only the persistence package." in sent_content
-    assert "parent conversation" in sent_content
+    assert "parent transcript" in sent_content
+    assert "Answer only the delegated question" in sent_content
+    assert "Distinguish observed evidence from inference" in sent_content
     assert "llm-7" not in sent_content
     assert parent_context.current_step == 7
     assert parent_context.current_llm_call_id == "llm-7"

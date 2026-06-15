@@ -122,9 +122,10 @@ def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path)
     assert "messages" not in summary
     assert audit["llm_call_id"] == llm_call["llm_call_id"] == "llm-1"
     prompt = json.loads((run_dir / "prompt.json").read_text(encoding="utf-8"))
-    assert prompt["prompt_version"] == "mvp-v1"
+    assert prompt["prompt_version"] == "mvp-v2"
     assert prompt["included_sections"] == ["core", "skill_catalog", "task"]
     assert prompt["available_skill_names"] == [
+        "django-repository",
         "github-actions",
         "node-repository",
         "python-repository",

@@ -97,7 +97,10 @@ class TodoWriteTool(RuntimeTool):
     """可选 todo 工具，用于 LLM 维护会话内短期任务。"""
 
     name = "todo_write"
-    description = "Create or update short-lived todos for the current agent turn."
+    description = (
+        "Create or update an optional short-lived checklist for genuinely multi-step work. "
+        "Do not use for an obvious one-step action."
+    )
     approval_level = ApprovalLevel.READ
     category = "planning"
     input_model = TodoWriteInput
