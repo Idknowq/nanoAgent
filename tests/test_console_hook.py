@@ -190,7 +190,7 @@ def test_rich_console_renderer_outputs_events_and_sections() -> None:
     )
 
     assert output.getvalue().splitlines() == [
-        "● LLM 1/20 request",
+        "[MAIN] ● LLM 1/20 request",
         "Run",
         "  step: 1/20",
         "  status: running",
@@ -215,7 +215,32 @@ def test_rich_console_renderer_labels_recovery_attempts() -> None:
         )
     )
 
-    assert output.getvalue().strip() == "● LLM 1/20 transient 2 request after 2.50s"
+    assert (
+        output.getvalue().strip()
+        == "[MAIN] ● LLM 1/20 transient 2 request after 2.50s"
+    )
+
+
+def test_rich_console_renderer_labels_subagent_events() -> None:
+    output = StringIO()
+    renderer = RichConsoleRenderer(
+        Console(file=output, color_system=None, force_terminal=False, width=120)
+    )
+
+    renderer.render_event(
+        ConsoleEvent(
+            type=ConsoleEventType.TOOL_STARTED,
+            run_id="run-1-subagent-2",
+            agent_id="subagent-2",
+            is_subagent=True,
+            step=3,
+            max_steps=20,
+            tool_name="read_file",
+            tool_input_summary="README.md",
+        )
+    )
+
+    assert output.getvalue().strip() == "[SUB subagent-2] → read_file  README.md"
 
 
 def test_permission_rejection_renders_error_without_tool_running(tmp_path: Path) -> None:

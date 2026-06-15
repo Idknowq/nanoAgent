@@ -9,7 +9,7 @@ from threading import Event, Lock
 
 from nano_agent.background.cancellation import CancellationToken
 from nano_agent.background.hook import BackgroundCompletionHook
-from nano_agent.background.models import BackgroundJobStatus
+from nano_agent.background.models import BackgroundJob, BackgroundJobStatus
 from nano_agent.background.presentation import public_subagent_result
 from nano_agent.background.store import BackgroundJobStore
 from nano_agent.background.supervisor import BackgroundJobSupervisor
@@ -383,7 +383,44 @@ def test_delegation_tools_submit_query_and_list_background_job(
     ] == ["One material risk."]
     assert "run_dir" not in loaded.data["background_job"]["result"]
     assert [job["job_id"] for job in listed.data["background_jobs"]] == [job_id]
+    assert listed.summary == "listed 1 background job(s): 1 succeeded"
     supervisor.shutdown()
+
+
+def test_delegated_task_list_summary_counts_jobs_by_status(tmp_path: Path) -> None:
+    class StubSupervisor:
+        def list(
+            self,
+            status: BackgroundJobStatus | None,
+            *,
+            observe: bool,
+        ) -> list[BackgroundJob]:
+            assert status is None
+            assert observe
+            return [
+                BackgroundJob(
+                    job_id="job-1",
+                    subagent_id="subagent-1",
+                    status=BackgroundJobStatus.RUNNING,
+                ),
+                BackgroundJob(
+                    job_id="job-2",
+                    subagent_id="subagent-2",
+                    status=BackgroundJobStatus.SUCCEEDED,
+                ),
+            ]
+
+    context = ToolContext(
+        run_id="run",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "run",
+        config=AgentConfig(),
+    )
+
+    result = DelegatedTaskListTool(StubSupervisor()).invoke({}, context)  # type: ignore[arg-type]
+
+    assert result.summary == "listed 2 background job(s): 1 running, 1 succeeded"
 
 
 def test_public_subagent_result_enforces_configured_character_budget() -> None:

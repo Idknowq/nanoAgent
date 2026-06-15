@@ -23,6 +23,8 @@ class ConsoleEventType(StrEnum):
 class ConsoleEvent(BaseModel):
     type: ConsoleEventType  # 生命周期事件类型。
     run_id: str  # 当前 Agent run 标识。
+    agent_id: str = "main"  # Main 或 Subagent 的展示标识。
+    is_subagent: bool = False  # 当前事件是否来自 Subagent。
     step: int  # 当前主循环步骤。
     max_steps: int  # 主循环最大步骤数。
     tool_name: str | None = None  # 工具事件对应的工具名。
@@ -75,6 +77,7 @@ class RichConsoleRenderer:
         self.console = console or Console()
 
     def render_event(self, event: ConsoleEvent) -> None:
+        prefix = self._scope_prefix(event)
         if event.type == ConsoleEventType.LLM_STARTED:
             attempt = ""
             if event.attempt_type != "primary":
@@ -86,18 +89,18 @@ class RichConsoleRenderer:
             )
             self.console.print(
                 Text(
-                    f"● LLM {event.step}/{event.max_steps}{attempt} request{delay}",
+                    f"{prefix} ● LLM {event.step}/{event.max_steps}{attempt} request{delay}",
                     style="bold cyan",
                 )
             )
             return
         if event.type == ConsoleEventType.LLM_COMPLETED:
-            self.console.print(self._llm_completed(event))
+            self.console.print(Text(f"{prefix} ") + self._llm_completed(event))
             return
         if event.type == ConsoleEventType.TOOL_STARTED:
             detail = f"  {event.tool_input_summary}" if event.tool_input_summary else ""
             self.console.print(
-                Text(f"→ {event.tool_name}{detail}", style="bold blue")
+                Text(f"{prefix} → {event.tool_name}{detail}", style="bold blue")
             )
             return
         if event.type == ConsoleEventType.TOOL_COMPLETED:
@@ -106,11 +109,17 @@ class RichConsoleRenderer:
             duration = f"  {event.duration_seconds:.2f}s" if event.duration_seconds is not None else ""
             detail = f"  {event.result_summary}" if event.result_summary else ""
             self.console.print(
-                Text(f"{marker} {event.tool_name}{duration}{detail}", style=style)
+                Text(
+                    f"{prefix} {marker} {event.tool_name}{duration}{detail}",
+                    style=style,
+                )
             )
             return
         self.console.print(
-            Text(f"✗ {event.result_summary or 'Unknown error'}", style="bold red")
+            Text(
+                f"{prefix} ✗ {event.result_summary or 'Unknown error'}",
+                style="bold red",
+            )
         )
 
     def render_sections(self, sections: list[ConsoleSection]) -> None:
@@ -139,6 +148,12 @@ class RichConsoleRenderer:
             else str(event.stop_reason or "end_turn")
         )
         return Text("  ".join(parts), style="cyan")
+
+    @staticmethod
+    def _scope_prefix(event: ConsoleEvent) -> str:
+        if event.is_subagent:
+            return f"[SUB {event.agent_id}]"
+        return "[MAIN]"
 
 
 class ConsoleProgressHook(NoOpHook):
@@ -252,6 +267,8 @@ class ConsoleProgressHook(NoOpHook):
         event = ConsoleEvent(
             type=event_type,
             run_id=context.run_id,
+            agent_id=context.subagent_id or "main",
+            is_subagent=context.subagent_id is not None,
             step=context.current_step,
             max_steps=context.max_steps,
             tool_name=tool_name,

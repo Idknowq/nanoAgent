@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+
 from pydantic import Field
 
 from nano_agent.background.models import BackgroundJob, BackgroundJobStatus
@@ -172,9 +174,18 @@ class DelegatedTaskListTool(RuntimeTool):
 
     def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         jobs = self.supervisor.list(input_data["status"], observe=True)
+        status_counts = Counter(job.status for job in jobs)
+        status_summary = ", ".join(
+            f"{status_counts[status]} {status.value}"
+            for status in BackgroundJobStatus
+            if status_counts[status]
+        )
+        summary = f"listed {len(jobs)} background job(s)"
+        if status_summary:
+            summary = f"{summary}: {status_summary}"
         return ToolResult(
             success=True,
-            summary=f"listed {len(jobs)} background job(s)",
+            summary=summary,
             data={
                 "background_jobs": [
                     _job_data(job, context.config.subagent_max_result_chars)
