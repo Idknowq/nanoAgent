@@ -22,3 +22,5 @@ build/
 # Claude Code (session-local state; keep out of repo)
 .claude/
 
+issues.md
+
