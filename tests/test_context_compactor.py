@@ -86,10 +86,76 @@ def test_tool_result_budget_persists_largest_latest_result(tmp_path: Path) -> No
     prepared = compactor.tool_result_budget(messages)
 
     replacement = json.loads(prepared[2].content)
-    persisted = compactor.store.run_dir / replacement["data"]["persisted_output"]["path"]
+    persisted = compactor.workspace_path / replacement["data"]["persisted_output"]["path"]
     assert persisted.read_text(encoding="utf-8").strip() == large
+    assert replacement["data"]["persisted_output"]["path_base"] == "workspace"
+    assert "Use read_file on that path" in replacement["data"]["recovery"]
     assert prepared[3].content == small
     assert messages[2].content == large
+
+
+def test_tool_result_budget_enforces_latest_batch_total(tmp_path: Path) -> None:
+    config = AgentConfig(
+        tool_result_budget_chars=3_000,
+        tool_result_preview_chars=16,
+    )
+    compactor, _, store = build_compactor(tmp_path, config)
+    first = json.dumps(
+        {"success": True, "summary": "read", "data": {"content": "a" * 2_000}}
+    )
+    second = json.dumps(
+        {"success": True, "summary": "read", "data": {"content": "b" * 2_000}}
+    )
+    messages = [
+        AgentMessage(role="user", content="inspect"),
+        AgentMessage(
+            role="assistant",
+            content="read files",
+            tool_uses=[
+                ToolUseRequest(id="first", name="read_file", input={"path": "first.py"}),
+                ToolUseRequest(id="second", name="read_file", input={"path": "second.py"}),
+            ],
+        ),
+        AgentMessage(role="tool", content=first, tool_call_id="first"),
+        AgentMessage(role="tool", content=second, tool_call_id="second"),
+    ]
+    store.append_many(messages)
+
+    prepared = compactor.tool_result_budget(messages)
+
+    assert prepared[2].content != first or prepared[3].content != second
+    prepared_total = len(prepared[2].content) + len(prepared[3].content)
+    assert prepared_total <= config.tool_result_budget_chars
+
+
+def test_tool_result_budget_excludes_workspace_artifact_dir_from_git(
+    tmp_path: Path,
+) -> None:
+    config = AgentConfig(
+        tool_result_budget_chars=250,
+        tool_result_preview_chars=16,
+    )
+    compactor, _, store = build_compactor(tmp_path, config)
+    exclude_path = compactor.workspace_path / ".git" / "info" / "exclude"
+    exclude_path.parent.mkdir(parents=True)
+    exclude_path.write_text("# local excludes\n", encoding="utf-8")
+    large = json.dumps(
+        {"success": True, "summary": "read", "data": {"content": "x" * 600}}
+    )
+    messages = [
+        AgentMessage(role="user", content="inspect"),
+        AgentMessage(
+            role="assistant",
+            content="read file",
+            tool_uses=[ToolUseRequest(id="large", name="read_file", input={"path": "large.py"})],
+        ),
+        AgentMessage(role="tool", content=large, tool_call_id="large"),
+    ]
+    store.append_many(messages)
+
+    compactor.tool_result_budget(messages)
+
+    assert ".nano-agent/" in exclude_path.read_text(encoding="utf-8")
 
 
 def test_snip_compact_keeps_tool_protocol_boundaries(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ from nano_agent.tools.path_utils import WorkspacePathError, resolve_workspace_pa
 IGNORED_NAMES = {
     ".git",
     ".mypy_cache",
+    ".nano-agent",
     ".pytest_cache",
     ".ruff_cache",
     ".venv",

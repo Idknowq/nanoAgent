@@ -78,7 +78,9 @@ result references, placeholders, or a generated conversation summary.
 Before each main LLM request, `ContextCompactor` applies this ordered pipeline:
 
 1. `tool_result_budget`: inspect the latest tool-result batch, persist the largest results
-   under `tool-results/`, and replace them only when the reference is smaller.
+   under `.nano-agent/tool-results/` in the workspace, and replace them only when the
+   workspace-relative reference is smaller. The replacement keeps a preview and a path that
+   can be read with `read_file` if exact content is needed.
 2. `snip_compact`: when estimated input tokens approach the usable context limit, keep the stable
    head and recent tail while preserving assistant-tool protocol boundaries. The default threshold
    leaves automatic summarization as the normal compaction path rather than deleting history early.

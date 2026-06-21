@@ -26,6 +26,7 @@ IGNORED_DIRS = frozenset(
     {
         ".git",
         ".mypy_cache",
+        ".nano-agent",
         ".pytest_cache",
         ".ruff_cache",
         ".venv",

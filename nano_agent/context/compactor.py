@@ -68,10 +68,22 @@ class CompactionStore:
         self.message_store = message_store  # 原始追加式消息存储，可为空。
         self._transcript_sequence = 0  # 当前进程内 transcript 递增序号。
 
-    def persist_tool_result(self, tool_call_id: str, content: str) -> Path:
+    def tool_result_path(self, tool_call_id: str, workspace_path: Path | None = None) -> Path:
         digest = hashlib.sha256(tool_call_id.encode("utf-8")).hexdigest()[:20]
-        target = self.run_dir / "tool-results" / f"{digest}.json"
+        if workspace_path is not None:
+            return workspace_path / ".nano-agent" / "tool-results" / f"{digest}.json"
+        return self.run_dir / "tool-results" / f"{digest}.json"
+
+    def persist_tool_result(
+        self,
+        tool_call_id: str,
+        content: str,
+        workspace_path: Path | None = None,
+    ) -> Path:
+        target = self.tool_result_path(tool_call_id, workspace_path)
         if not target.exists():
+            if workspace_path is not None:
+                self._ensure_workspace_artifact_ignored(workspace_path)
             target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("w", encoding="utf-8") as file:
                 file.write(content)
@@ -79,6 +91,28 @@ class CompactionStore:
                 file.flush()
                 os.fsync(file.fileno())
         return target
+
+    @staticmethod
+    def _ensure_workspace_artifact_ignored(workspace_path: Path) -> None:
+        exclude_path = workspace_path / ".git" / "info" / "exclude"
+        if not exclude_path.is_file():
+            return
+        marker = ".nano-agent/"
+        try:
+            content = exclude_path.read_text(encoding="utf-8")
+        except OSError:
+            return
+        if any(line.strip() == marker for line in content.splitlines()):
+            return
+        try:
+            with exclude_path.open("a", encoding="utf-8") as file:
+                if content and not content.endswith("\n"):
+                    file.write("\n")
+                file.write(f"{marker}\n")
+                file.flush()
+                os.fsync(file.fileno())
+        except OSError:
+            return
 
     def write_transcript(
         self,
@@ -185,8 +219,11 @@ class ContextCompactor:
             if total <= self.config.tool_result_budget_chars:
                 break
             original_chars = len(message.content)
-            path = self.store.persist_tool_result(message.tool_call_id or "unknown", message.content)
             preview = message.content[: self.config.tool_result_preview_chars]
+            path = self.store.tool_result_path(
+                message.tool_call_id or "unknown",
+                self.workspace_path,
+            )
             replacement = self._persisted_tool_result(
                 message,
                 path,
@@ -195,6 +232,11 @@ class ContextCompactor:
             )
             if len(replacement) >= original_chars:
                 continue
+            self.store.persist_tool_result(
+                message.tool_call_id or "unknown",
+                message.content,
+                self.workspace_path,
+            )
             message.content = replacement
             total -= original_chars - len(message.content)
         return copied
@@ -499,12 +541,18 @@ class ContextCompactor:
             data = {}
         payload["data"] = {
             "persisted_output": {
-                "path": self._relative_path(path),
+                "path": self._workspace_relative_path(path),
+                "path_base": "workspace",
                 "characters": original_chars,
                 "sha256": hashlib.sha256(message.content.encode("utf-8")).hexdigest(),
                 "preview": preview,
             },
-            "recovery": "Re-run the original tool call if full content is needed.",
+            "recovery": (
+                "Full content is persisted at data.persisted_output.path relative to the "
+                "workspace. Use read_file on that path, with offset/limit paging if needed, "
+                "when exact content is required; re-run the original tool call only if the "
+                "artifact is unavailable."
+            ),
             **{
                 key: value
                 for key, value in data.items()
@@ -531,6 +579,9 @@ class ContextCompactor:
 
     def _relative_path(self, path: Path) -> str:
         return path.relative_to(self.store.run_dir).as_posix()
+
+    def _workspace_relative_path(self, path: Path) -> str:
+        return path.relative_to(self.workspace_path).as_posix()
 
     @staticmethod
     def _copy_messages(messages: list[AgentMessage]) -> list[AgentMessage]:
