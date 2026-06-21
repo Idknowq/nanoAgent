@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from nano_agent.config import AgentConfig
 from nano_agent.context.state import CompactionStateBuilder
 from nano_agent.models import AgentMessage
-from nano_agent.persistence.json_io import atomic_write_json
+from nano_agent.persistence.json_io import atomic_write_json, atomic_write_text
 from nano_agent.persistence.message_store import MessageStore
 from nano_agent.services.llm import LLMClient
 from nano_agent.tools.base import ToolSpec
@@ -70,7 +70,7 @@ class CompactionStore:
 
     def tool_result_path(self, tool_call_id: str, workspace_path: Path | None = None) -> Path:
         digest = hashlib.sha256(tool_call_id.encode("utf-8")).hexdigest()[:20]
-        if workspace_path is not None:
+        if workspace_path is not None and self._workspace_git_dir(workspace_path) is not None:
             return workspace_path / ".nano-agent" / "tool-results" / f"{digest}.json"
         return self.run_dir / "tool-results" / f"{digest}.json"
 
@@ -81,25 +81,30 @@ class CompactionStore:
         workspace_path: Path | None = None,
     ) -> Path:
         target = self.tool_result_path(tool_call_id, workspace_path)
-        if not target.exists():
-            if workspace_path is not None:
-                self._ensure_workspace_artifact_ignored(workspace_path)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("w", encoding="utf-8") as file:
-                file.write(content)
-                file.write("\n")
-                file.flush()
-                os.fsync(file.fileno())
+        expected = f"{content}\n"
+        if target.exists():
+            try:
+                if target.read_text(encoding="utf-8") == expected:
+                    return target
+            except OSError:
+                pass
+        if workspace_path is not None and target.is_relative_to(workspace_path):
+            self._ensure_workspace_artifact_ignored(workspace_path)
+        atomic_write_text(target, expected)
         return target
 
     @staticmethod
     def _ensure_workspace_artifact_ignored(workspace_path: Path) -> None:
-        exclude_path = workspace_path / ".git" / "info" / "exclude"
-        if not exclude_path.is_file():
+        git_dir = CompactionStore._workspace_git_dir(workspace_path)
+        if git_dir is None:
             return
+        exclude_path = git_dir / "info" / "exclude"
         marker = ".nano-agent/"
         try:
+            exclude_path.parent.mkdir(parents=True, exist_ok=True)
             content = exclude_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            content = ""
         except OSError:
             return
         if any(line.strip() == marker for line in content.splitlines()):
@@ -113,6 +118,28 @@ class CompactionStore:
                 os.fsync(file.fileno())
         except OSError:
             return
+
+    @staticmethod
+    def _workspace_git_dir(workspace_path: Path) -> Path | None:
+        git_path = workspace_path / ".git"
+        if git_path.is_dir():
+            return git_path
+        if not git_path.is_file():
+            return None
+        try:
+            content = git_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        prefix = "gitdir:"
+        if not content.startswith(prefix):
+            return None
+        raw_git_dir = content[len(prefix) :].strip()
+        if not raw_git_dir:
+            return None
+        git_dir = Path(raw_git_dir)
+        if not git_dir.is_absolute():
+            git_dir = workspace_path / git_dir
+        return git_dir.resolve(strict=False)
 
     def write_transcript(
         self,
@@ -224,14 +251,26 @@ class ContextCompactor:
                 message.tool_call_id or "unknown",
                 self.workspace_path,
             )
+            path_base, persisted_path = self._persisted_output_path(path)
             replacement = self._persisted_tool_result(
                 message,
-                path,
+                persisted_path=persisted_path,
+                path_base=path_base,
                 original_chars=original_chars,
                 preview=preview,
+                sha256="0" * 64,
             )
             if len(replacement) >= original_chars:
                 continue
+            sha256 = hashlib.sha256(message.content.encode("utf-8")).hexdigest()
+            replacement = self._persisted_tool_result(
+                message,
+                persisted_path=persisted_path,
+                path_base=path_base,
+                original_chars=original_chars,
+                preview=preview,
+                sha256=sha256,
+            )
             self.store.persist_tool_result(
                 message.tool_call_id or "unknown",
                 message.content,
@@ -527,10 +566,12 @@ class ContextCompactor:
     def _persisted_tool_result(
         self,
         message: AgentMessage,
-        path: Path,
         *,
+        persisted_path: str,
+        path_base: Literal["workspace", "run_dir"],
         original_chars: int,
         preview: str,
+        sha256: str,
     ) -> str:
         try:
             payload = json.loads(message.content)
@@ -541,17 +582,17 @@ class ContextCompactor:
             data = {}
         payload["data"] = {
             "persisted_output": {
-                "path": self._workspace_relative_path(path),
-                "path_base": "workspace",
+                "path": persisted_path,
+                "path_base": path_base,
                 "characters": original_chars,
-                "sha256": hashlib.sha256(message.content.encode("utf-8")).hexdigest(),
+                "sha256": sha256,
                 "preview": preview,
             },
             "recovery": (
-                "Full content is persisted at data.persisted_output.path relative to the "
-                "workspace. Use read_file on that path, with offset/limit paging if needed, "
-                "when exact content is required; re-run the original tool call only if the "
-                "artifact is unavailable."
+                "If data.persisted_output.path_base is workspace, full content is readable "
+                "with read_file at data.persisted_output.path, using offset/limit paging if "
+                "needed. If path_base is run_dir, the artifact is only available to the host; "
+                "re-run the original tool call if exact content is needed."
             ),
             **{
                 key: value
@@ -582,6 +623,11 @@ class ContextCompactor:
 
     def _workspace_relative_path(self, path: Path) -> str:
         return path.relative_to(self.workspace_path).as_posix()
+
+    def _persisted_output_path(self, path: Path) -> tuple[Literal["workspace", "run_dir"], str]:
+        if path.is_relative_to(self.workspace_path):
+            return "workspace", self._workspace_relative_path(path)
+        return "run_dir", self._relative_path(path)
 
     @staticmethod
     def _copy_messages(messages: list[AgentMessage]) -> list[AgentMessage]:
