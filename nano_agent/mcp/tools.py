@@ -78,3 +78,55 @@ def discover_and_register(
         registry.register(adapter)
         adapters.append(adapter)
     return adapters
+
+
+def build_mcp_context_messages(client: MCPClient) -> list[Any]:
+    """Build system messages from MCP server resources and prompts.
+
+    Returns a list of AgentMessage objects describing available MCP
+    resources and prompt templates for the Agent's context.
+    """
+    from nano_agent.models import AgentMessage
+
+    parts: list[str] = []
+
+    # Resources
+    try:
+        resources = client.list_resources()
+        if resources:
+            lines = ["## MCP Resources", ""]
+            for r in resources:
+                lines.append(f"- **{r.name}** (`{r.uri}`): {r.description}")
+            parts.append("\n".join(lines))
+    except Exception:
+        pass
+
+    # Prompts
+    try:
+        prompts = client.list_prompts()
+        if prompts:
+            lines = ["## MCP Prompt Templates", ""]
+            for p in prompts:
+                pname = p.name if hasattr(p, "name") else p.get("name", "")
+                pdesc = (
+                    p.description if hasattr(p, "description") else p.get("description", "")
+                )
+                lines.append(f"- **{pname}**: {pdesc}")
+            parts.append("\n".join(lines))
+    except Exception:
+        pass
+
+    if not parts:
+        return []
+
+    text = "\n\n".join(parts)
+    return [
+        AgentMessage(
+            role="system",
+            content=(
+                "The following context is available from connected MCP servers. "
+                "Use the tools already registered for resource/prompt access.\n\n"
+                + text
+            ),
+        )
+    ]

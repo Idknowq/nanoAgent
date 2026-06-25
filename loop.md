@@ -51,4 +51,9 @@
 - **描述**: 实现 web_fetch 工具，抓取 URL 内容并转纯文本。HTML 自动剥离标签、脚本、样式。支持 HTTP→HTTPS 升级、截断、超时
 - **状态**: ✅ 完成
 
+### 19:05 | 1.3 MCP 资源/提示模板上下文注入
+- **文件**: `nano_agent/mcp/tools.py` (扩展), `tests/test_mcp_tools.py` (扩展)
+- **描述**: build_mcp_context_messages 从 MCP server 发现资源和提示模板，生成 AgentMessage 注入 Agent 上下文。容错设计，server 报错不崩溃
+- **状态**: ✅ 完成
+
 ---

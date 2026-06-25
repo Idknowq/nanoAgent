@@ -16,7 +16,11 @@ from nano_agent.mcp.protocol import (
     MCPTool,
     ServerCapabilities,
 )
-from nano_agent.mcp.tools import MCPToolAdapter, discover_and_register
+from nano_agent.mcp.tools import (
+    MCPToolAdapter,
+    build_mcp_context_messages,
+    discover_and_register,
+)
 from nano_agent.tools.base import ToolContext, ToolRegistry
 
 
@@ -123,6 +127,83 @@ class TestMCPToolAdapter:
         result = adapter.invoke({}, context)
         assert not result.success
         assert result.error_code == "mcp_tool_returned_error"
+
+
+def _resource_list_response(id_val: int, resources: list[dict]) -> bytes:
+    return json.dumps(
+        JsonRpcResponse(id=id_val, result={"resources": resources}).model_dump(
+            mode="json"
+        )
+    ).encode()
+
+
+def _prompt_list_response(id_val: int, prompts: list[dict]) -> bytes:
+    return json.dumps(
+        JsonRpcResponse(id=id_val, result={"prompts": prompts}).model_dump(mode="json")
+    ).encode()
+
+
+class TestBuildMCPContextMessages:
+    def test_builds_resource_and_prompt_context(self):
+        transport = FakeMCPTransport(
+            [
+                _init_response(),
+                _resource_list_response(
+                    2,
+                    [{"uri": "file:///doc", "name": "docs", "description": "API docs"}],
+                ),
+                _prompt_list_response(
+                    3,
+                    [{"name": "review", "description": "Code review prompt"}],
+                ),
+            ]
+        )
+        client = MCPClient(transport)
+        client.start()
+        messages = build_mcp_context_messages(client)
+        assert len(messages) == 1
+        assert "API docs" in messages[0].content
+        assert "Code review prompt" in messages[0].content
+
+    def test_empty_resources_and_prompts(self):
+        transport = FakeMCPTransport(
+            [
+                _init_response(),
+                _resource_list_response(2, []),
+                _prompt_list_response(3, []),
+            ]
+        )
+        client = MCPClient(transport)
+        client.start()
+        messages = build_mcp_context_messages(client)
+        assert messages == []
+
+    def test_handles_errors_gracefully(self):
+        """Should not crash if resource/prompt listing fails."""
+        transport = FakeMCPTransport(
+            [
+                _init_response(),
+                json.dumps(
+                    JsonRpcResponse(
+                        id=2,
+                        error={"code": -32601, "message": "Method not found"},
+                        result=None,
+                    ).model_dump(mode="json")
+                ).encode(),
+                json.dumps(
+                    JsonRpcResponse(
+                        id=3,
+                        error={"code": -32601, "message": "Method not found"},
+                        result=None,
+                    ).model_dump(mode="json")
+                ).encode(),
+            ]
+        )
+        client = MCPClient(transport)
+        client.start()
+        # The client raises on error, but build_mcp_context_messages catches
+        messages = build_mcp_context_messages(client)
+        assert messages == []
 
 
 class TestDiscoverAndRegister:
