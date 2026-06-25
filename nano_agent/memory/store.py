@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -13,6 +14,7 @@ class MemoryRecord(BaseModel):
     key: str  # 命名空间内的记录标识。
     value: str  # 记忆正文，当前用纯文本保存。
     tags: list[str] = Field(default_factory=list)  # 辅助检索和分类的标签。
+    expires_at: datetime | None = None  # TTL 过期时间；为空则永不过期。
 
 
 class InMemoryStore:
@@ -53,27 +55,35 @@ class JsonlMemoryStore:
 
     def upsert(self, record: MemoryRecord) -> None:
         """Add or replace a record with the same namespace + key."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        records: list[MemoryRecord] = []
+        records = self._load_all()
         key = (record.namespace, record.key)
         replaced = False
-        if self.path.exists():
-            for line in self.path.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                existing = MemoryRecord.model_validate_json(line)
-                if (existing.namespace, existing.key) == key:
-                    records.append(record)
-                    replaced = True
-                else:
-                    records.append(existing)
+        for i, existing in enumerate(records):
+            if (existing.namespace, existing.key) == key:
+                records[i] = record
+                replaced = True
+                break
         if not replaced:
             records.append(record)
-        with self.path.open("w", encoding="utf-8") as file:
-            for r in records:
-                file.write(r.model_dump_json() + "\n")
-            file.flush()
-            os.fsync(file.fileno())
+        self._write_all(records)
+
+    def _load_all(self) -> list[MemoryRecord]:
+        if not self.path.exists():
+            return []
+        return [
+            MemoryRecord.model_validate_json(line)
+            for line in self.path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+    def delete(self, namespace: str, key: str) -> bool:
+        """Delete a record by namespace + key. Returns True if deleted."""
+        records = self._load_all()
+        new_records = [r for r in records if (r.namespace, r.key) != (namespace, key)]
+        if len(new_records) == len(records):
+            return False
+        self._write_all(new_records)
+        return True
 
     def search(
         self,
@@ -82,15 +92,18 @@ class JsonlMemoryStore:
         tags: set[str] | None = None,
         limit: int = 10,
     ) -> list[MemoryRecord]:
-        if not self.path.exists():
-            return []
+        now = datetime.now(timezone.utc)
+        records = [r for r in self._load_all() if r.expires_at is None or r.expires_at > now]
         namespace_set = {namespaces} if isinstance(namespaces, str) else set(namespaces)
-        records = [
-            MemoryRecord.model_validate_json(line)
-            for line in self.path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
         matches = [record for record in records if record.namespace in namespace_set]
         if tags:
             matches = [record for record in matches if tags.intersection(record.tags)]
         return sorted(matches, key=lambda record: (record.namespace, record.key))[:limit]
+
+    def _write_all(self, records: list[MemoryRecord]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("w", encoding="utf-8") as file:
+            for r in records:
+                file.write(r.model_dump_json() + "\n")
+            file.flush()
+            os.fsync(file.fileno())
