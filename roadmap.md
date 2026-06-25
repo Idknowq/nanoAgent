@@ -19,7 +19,7 @@
 ## 三、Web 工具
 
 - [x] **3.1** web_search 工具 — 基于 HTTP 搜索 API，返回结构化搜索结果 ✅ 2026-06-25
-- [ ] **3.2** web_fetch 工具 — 抓取 URL 内容并转为文本/markdown
+- [x] **3.2** web_fetch 工具 — 抓取 URL 内容并转为文本/markdown ✅ 2026-06-25
 - [ ] **3.3** Web 工具安全策略 — URL 白名单/黑名单、内容大小限制、超时控制
 
 ## 四、Thinking/推理模式支持
@@ -30,7 +30,7 @@
 
 ## 五、沙箱与安全隔离
 
-- [ ] **5.1** Docker 沙箱管理器 — 实现 `nano_agent/sandbox/docker.py`，支持在容器中执行命令
+- [x] **5.1** Docker 沙箱管理器 — 实现 `nano_agent/sandbox/docker.py`，支持在容器中执行命令 ✅ 2026-06-25
 - [ ] **5.2** 沙箱配置集成 — `AgentConfig` 中添加 `sandbox` 配置项（image, network, volume mounts）
 - [ ] **5.3** 沙箱与 runtime 环境统一 — 将当前 venv 隔离迁移到 Docker 沙箱内执行
 

@@ -46,4 +46,9 @@
 - **描述**: Docker 容器沙箱，支持镜像拉取、容器创建、命令执行、环境变量注入、网络隔离、超时控制
 - **状态**: ✅ 完成
 
+### 18:55 | 3.2 web_fetch 工具
+- **文件**: `nano_agent/tools/web_fetch.py`, `tests/test_web_fetch.py`
+- **描述**: 实现 web_fetch 工具，抓取 URL 内容并转纯文本。HTML 自动剥离标签、脚本、样式。支持 HTTP→HTTPS 升级、截断、超时
+- **状态**: ✅ 完成
+
 ---
