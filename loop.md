@@ -41,4 +41,9 @@
 - **描述**: 实现 web_search 工具，可配置搜索 API，结果解析兼容多种响应格式，6 测试通过
 - **状态**: ✅ 完成
 
+### 18:45 | 5.1 Docker 沙箱管理器
+- **文件**: `nano_agent/sandbox/__init__.py`, `nano_agent/sandbox/docker.py`, `tests/test_docker_sandbox.py`
+- **描述**: Docker 容器沙箱，支持镜像拉取、容器创建、命令执行、环境变量注入、网络隔离、超时控制
+- **状态**: ✅ 完成
+
 ---
