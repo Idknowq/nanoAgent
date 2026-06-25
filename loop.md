@@ -26,4 +26,19 @@
   5. `_request()` 跳过服务器通知消息，最多跳过 10 条
 - **状态**: ✅ 完成
 
+### 18:30 | 2.1 memory_update 工具
+- **文件**: `nano_agent/tools/memory_update.py`, `nano_agent/memory/store.py` (修改), `nano_agent/agent.py` (修改), `tests/test_memory_update.py`
+- **描述**: Agent 可在运行中写入/更新持久记忆。支持 add/upsert 操作，JsonlMemoryStore 新增 upsert 方法
+- **状态**: ✅ 完成
+
+### 18:35 | 1.2 MCP 工具发现与注册桥接
+- **文件**: `nano_agent/mcp/tools.py`, `tests/test_mcp_tools.py`
+- **描述**: MCPToolAdapter 将 MCP 工具包装为 RuntimeTool，discover_and_register 自动发现并注册。支持工具调用转发和错误处理
+- **状态**: ✅ 完成
+
+### 18:40 | 3.1 web_search 工具
+- **文件**: `nano_agent/tools/web_search.py`, `tests/test_web_search.py`
+- **描述**: 实现 web_search 工具，可配置搜索 API，结果解析兼容多种响应格式，6 测试通过
+- **状态**: ✅ 完成
+
 ---

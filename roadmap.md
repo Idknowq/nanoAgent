@@ -5,20 +5,20 @@
 ## 一、MCP 接入 (Model Context Protocol)
 
 - [x] **1.1** MCP 客户端基础框架 — 实现 `nano_agent/mcp/client.py`，支持 stdio 传输，连接 MCP server 并完成 initialize 握手 ✅ 2026-06-25
-- [ ] **1.2** MCP 工具发现与注册 — 从 MCP server 拉取 tool list，转换为 `RuntimeTool` 注册到 ToolRegistry
+- [x] **1.2** MCP 工具发现与注册 — 从 MCP server 拉取 tool list，转换为 `RuntimeTool` 注册到 ToolRegistry ✅ 2026-06-25
 - [ ] **1.3** MCP 资源/提示模板支持 — 支持 `resources/list` 和 `prompts/list`，注入到 Agent 上下文
 - [ ] **1.4** MCP 配置管理 — 在 `AgentConfig` 中添加 `mcp_servers` 字段，支持多 server 配置
 
 ## 二、记忆系统增强
 
-- [ ] **2.1** 记忆更新工具 — 实现 `memory_update` 工具，允许 Agent 在运行中写入/更新记忆
+- [x] **2.1** 记忆更新工具 — 实现 `memory_update` 工具，允许 Agent 在运行中写入/更新记忆 ✅ 2026-06-25
 - [ ] **2.2** 记忆删除与过期 — 支持记忆的 TTL 过期和手动删除
 - [ ] **2.3** 记忆搜索增强 — 支持模糊匹配、全文搜索（当前仅 namespace + tag 精确过滤）
 - [ ] **2.4** 跨运行记忆持久化 — 确保 failure/repo 记忆在运行间可靠传递，优化记忆注入格式
 
 ## 三、Web 工具
 
-- [ ] **3.1** web_search 工具 — 基于 HTTP 搜索 API，返回结构化搜索结果
+- [x] **3.1** web_search 工具 — 基于 HTTP 搜索 API，返回结构化搜索结果 ✅ 2026-06-25
 - [ ] **3.2** web_fetch 工具 — 抓取 URL 内容并转为文本/markdown
 - [ ] **3.3** Web 工具安全策略 — URL 白名单/黑名单、内容大小限制、超时控制
 

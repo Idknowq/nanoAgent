@@ -51,6 +51,30 @@ class JsonlMemoryStore:
             file.flush()
             os.fsync(file.fileno())
 
+    def upsert(self, record: MemoryRecord) -> None:
+        """Add or replace a record with the same namespace + key."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        records: list[MemoryRecord] = []
+        key = (record.namespace, record.key)
+        replaced = False
+        if self.path.exists():
+            for line in self.path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                existing = MemoryRecord.model_validate_json(line)
+                if (existing.namespace, existing.key) == key:
+                    records.append(record)
+                    replaced = True
+                else:
+                    records.append(existing)
+        if not replaced:
+            records.append(record)
+        with self.path.open("w", encoding="utf-8") as file:
+            for r in records:
+                file.write(r.model_dump_json() + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+
     def search(
         self,
         namespaces: str | list[str],

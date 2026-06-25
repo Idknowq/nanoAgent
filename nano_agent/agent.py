@@ -36,6 +36,7 @@ from nano_agent.tools.delegate_task import (
     DelegateTaskTool,
 )
 from nano_agent.tools.finish_run import FinishRunTool
+from nano_agent.tools.memory_update import MemoryUpdateTool
 from nano_agent.tools.tasks import TaskCreateTool, TaskGetTool, TaskListTool, TaskUpdateTool
 from nano_agent.workspace import WorkspaceManager
 
@@ -111,6 +112,7 @@ class NanoAgent:
             tools.register(TaskGetTool(task_service))
             tools.register(TaskListTool(task_service))
             tools.register(TaskUpdateTool(task_service))
+            tools.register(MemoryUpdateTool())
             hooks = [SkillActivationHook(skill_session), *build_default_hooks(self.config)]
             if self.config.subagents_enabled:
                 manager = SubagentManager(
