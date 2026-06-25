@@ -18,6 +18,7 @@ from nano_agent.mcp.protocol import (
     JsonRpcNotification,
     JsonRpcRequest,
     JsonRpcResponse,
+    MCPPrompt,
     MCPResource,
     MCPTool,
     ResourceContent,
@@ -36,6 +37,9 @@ class MCPProtocolError(RuntimeError):
 
 class MCPTransport(ABC):
     """Abstract transport for MCP client-server communication."""
+
+    def start(self) -> None:
+        """Initialize transport resources. No-op by default; override if needed."""
 
     @abstractmethod
     def send(self, message: bytes) -> None:
@@ -86,13 +90,18 @@ class StdioTransport(MCPTransport):
             raise MCPTransportError("Transport not started")
         line = self._process.stdout.readline()
         if not line:
-            stderr_tail = ""
+            stderr_info = ""
             if self._process.stderr is not None:
                 try:
-                    self._process.stderr.seek(0, 2)
+                    remaining = self._process.stderr.read()
+                    if remaining:
+                        stderr_text = remaining.decode("utf-8", errors="replace")[-500:]
+                        stderr_info = f" stderr: {stderr_text}"
                 except OSError:
                     pass
-            raise MCPTransportError(f"Server stdout closed unexpectedly. {stderr_tail}")
+            raise MCPTransportError(
+                f"Server stdout closed unexpectedly.{stderr_info}"
+            )
         return line.rstrip(b"\n")
 
     def close(self) -> None:
@@ -102,11 +111,20 @@ class StdioTransport(MCPTransport):
             self._process.stdin.close()
         except OSError:
             pass
+        # Drain stdout to prevent pipe-buffer deadlock during wait.
+        try:
+            if self._process.stdout is not None:
+                self._process.stdout.read()
+        except OSError:
+            pass
         try:
             self._process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             self._process.kill()
-            self._process.wait()
+            try:
+                self._process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
         self._process = None
 
 
@@ -133,8 +151,7 @@ class MCPClient:
 
     def start(self) -> InitializeResult:
         """Start transport and perform MCP initialize handshake."""
-        if isinstance(self._transport, StdioTransport):
-            self._transport.start()
+        self._transport.start()
         return self._initialize()
 
     def close(self) -> None:
@@ -185,10 +202,11 @@ class MCPClient:
 
     # ---- prompts ----
 
-    def list_prompts(self) -> list[dict[str, Any]]:
+    def list_prompts(self) -> list[MCPPrompt]:
         """Discover prompt templates exposed by the MCP server."""
         result = self._request("prompts/list")
-        return result.get("prompts", [])
+        prompts_raw = result.get("prompts", [])
+        return [MCPPrompt.model_validate(p) for p in prompts_raw]
 
     def get_prompt(self, name: str, arguments: dict[str, Any] | None = None) -> GetPromptResult:
         """Get a rendered prompt from the MCP server."""
@@ -216,16 +234,29 @@ class MCPClient:
         request = JsonRpcRequest(id=self._request_id, method=method, params=params)
         raw_request = json.dumps(request.model_dump(mode="json"), ensure_ascii=False)
         self._transport.send(raw_request.encode("utf-8"))
-        raw_response = self._transport.receive()
-        try:
-            response = JsonRpcResponse.model_validate_json(raw_response)
-        except Exception as exc:
-            raise MCPProtocolError(f"Failed to parse response: {exc}") from exc
-        if response.error is not None:
-            raise MCPProtocolError(
-                f"MCP error {response.error.code}: {response.error.message}"
-            )
-        return response.result
+        # Receive, skipping server notifications (which have no id or a
+        # different id) until we get the response matching our request.
+        max_skipped = 10
+        for _ in range(max_skipped + 1):
+            raw_response = self._transport.receive()
+            try:
+                response = JsonRpcResponse.model_validate_json(raw_response)
+            except Exception as exc:
+                raise MCPProtocolError(f"Failed to parse response: {exc}") from exc
+            # Skip notifications or mismatched responses
+            if response.id is not None and response.id != self._request_id:
+                continue
+            if response.id is None:
+                continue
+            if response.error is not None:
+                raise MCPProtocolError(
+                    f"MCP error {response.error.code}: {response.error.message}"
+                )
+            return response.result
+        raise MCPProtocolError(
+            "Too many server notifications — response for request "
+            f"#{self._request_id} not received"
+        )
 
     def _notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         notification = JsonRpcNotification(method=method, params=params)
