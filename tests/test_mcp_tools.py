@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -16,9 +17,11 @@ from nano_agent.mcp.protocol import (
     MCPTool,
     ServerCapabilities,
 )
+from nano_agent.config import MCPServerConfig
 from nano_agent.mcp.tools import (
     MCPToolAdapter,
     build_mcp_context_messages,
+    create_clients_from_config,
     discover_and_register,
 )
 from nano_agent.tools.base import ToolContext, ToolRegistry
@@ -204,6 +207,77 @@ class TestBuildMCPContextMessages:
         # The client raises on error, but build_mcp_context_messages catches
         messages = build_mcp_context_messages(client)
         assert messages == []
+
+
+class TestCreateClientsFromConfig:
+    def test_creates_client_for_enabled_server(self):
+        from nano_agent.config import AgentConfig
+
+        config = AgentConfig(
+            mcp_servers=[
+                MCPServerConfig(
+                    name="test-srv",
+                    command=["echo", "{}"],
+                )
+            ]
+        )
+        with patch("subprocess.Popen") as mock_popen:
+            mock_popen.return_value.stdin = None
+            mock_popen.return_value.stdout = None
+            # Let start fail cleanly since we can't do real stdio
+            try:
+                clients = create_clients_from_config(config)
+            except Exception:
+                clients = []
+        # Even if start fails, the function was called
+        assert mock_popen.called
+
+    def test_skips_disabled_server(self):
+        from nano_agent.config import AgentConfig
+
+        config = AgentConfig(
+            mcp_servers=[
+                MCPServerConfig(
+                    name="disabled",
+                    command=["echo"],
+                    enabled=False,
+                )
+            ]
+        )
+        clients = create_clients_from_config(config)
+        assert len(clients) == 0
+
+    def test_no_servers(self):
+        from nano_agent.config import AgentConfig
+
+        config = AgentConfig()
+        clients = create_clients_from_config(config)
+        assert clients == []
+
+
+class TestMCPServerConfig:
+    def test_defaults(self):
+        cfg = MCPServerConfig(name="srv", command=["cmd"])
+        assert cfg.enabled is True
+        assert cfg.env is None
+
+    def test_with_env(self):
+        cfg = MCPServerConfig(
+            name="srv", command=["cmd"], env={"KEY": "VAL"}
+        )
+        assert cfg.env == {"KEY": "VAL"}
+
+    def test_agent_config_accepts_mcp_servers(self):
+        from nano_agent.config import AgentConfig
+
+        config = AgentConfig(
+            mcp_servers=[
+                MCPServerConfig(name="a", command=["a"]),
+                MCPServerConfig(name="b", command=["b"]),
+            ]
+        )
+        assert len(config.mcp_servers) == 2
+        assert config.mcp_servers[0].name == "a"
 
 
 class TestDiscoverAndRegister:

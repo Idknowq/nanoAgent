@@ -80,6 +80,28 @@ def discover_and_register(
     return adapters
 
 
+def create_clients_from_config(config: Any) -> list[tuple[str, MCPClient]]:
+    """Create MCPClient instances from AgentConfig.mcp_servers.
+
+    Returns list of (server_name, client) for enabled servers.
+    """
+    from nano_agent.mcp.client import StdioTransport
+
+    servers = getattr(config, "mcp_servers", [])
+    clients: list[tuple[str, MCPClient]] = []
+    for server in servers:
+        if not getattr(server, "enabled", True):
+            continue
+        transport = StdioTransport(
+            command=server.command,
+            env=server.env,
+        )
+        client = MCPClient(transport)
+        client.start()
+        clients.append((server.name, client))
+    return clients
+
+
 def build_mcp_context_messages(client: MCPClient) -> list[Any]:
     """Build system messages from MCP server resources and prompts.
 

@@ -7,7 +7,7 @@
 - [x] **1.1** MCP 客户端基础框架 — 实现 `nano_agent/mcp/client.py`，支持 stdio 传输，连接 MCP server 并完成 initialize 握手 ✅ 2026-06-25
 - [x] **1.2** MCP 工具发现与注册 — 从 MCP server 拉取 tool list，转换为 `RuntimeTool` 注册到 ToolRegistry ✅ 2026-06-25
 - [x] **1.3** MCP 资源/提示模板支持 — 支持 `resources/list` 和 `prompts/list`，注入到 Agent 上下文 ✅ 2026-06-25
-- [ ] **1.4** MCP 配置管理 — 在 `AgentConfig` 中添加 `mcp_servers` 字段，支持多 server 配置
+- [x] **1.4** MCP 配置管理 — 在 `AgentConfig` 中添加 `mcp_servers` 字段，支持多 server 配置 ✅ 2026-06-25
 
 ## 二、记忆系统增强
 

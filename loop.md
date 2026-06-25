@@ -56,4 +56,9 @@
 - **描述**: build_mcp_context_messages 从 MCP server 发现资源和提示模板，生成 AgentMessage 注入 Agent 上下文。容错设计，server 报错不崩溃
 - **状态**: ✅ 完成
 
+### 19:15 | 1.4 MCP 配置管理
+- **文件**: `nano_agent/config.py` (MCPServerConfig), `nano_agent/mcp/tools.py` (create_clients_from_config), `tests/test_mcp_tools.py`
+- **描述**: AgentConfig 添加 mcp_servers 字段，MCPServerConfig 模型支持 name/command/env/enabled。create_clients_from_config 工厂函数按配置批量创建 MCPClient
+- **状态**: ✅ 完成
+
 ---

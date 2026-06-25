@@ -5,6 +5,15 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 
+class MCPServerConfig(BaseModel):
+    """Configuration for a single MCP server connection."""
+
+    name: str  # unique name for this server
+    command: list[str]  # e.g. ["python", "-m", "my_mcp_server"]
+    env: dict[str, str] | None = None  # extra environment variables
+    enabled: bool = True
+
+
 class AgentConfig(BaseModel):
     """单次 nanoAgent 进程的运行配置。"""
 
@@ -32,6 +41,7 @@ class AgentConfig(BaseModel):
     skills_root: Path | None = None  # 可选的 Markdown skill 目录；为空时使用内置 skills。
     memory_path: Path | None = None  # 可选的跨运行 JSONL memory 文件。
     memory_limit: int = Field(default=5, ge=0, le=20)  # 初始 prompt 最多注入的 memory 数量。
+    mcp_servers: list[MCPServerConfig] = Field(default_factory=list)  # MCP server 列表。
     context_compaction_enabled: bool = True  # 是否启用 LLM 调用前上下文压缩管线。
     tool_result_budget_chars: int = Field(default=32_000, ge=1)  # 单轮工具结果字符预算。
     tool_result_preview_chars: int = Field(default=8_000, ge=0)  # 大结果落盘后的预览长度。
