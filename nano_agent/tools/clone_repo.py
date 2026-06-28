@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import os
 import re
-import subprocess
+import signal
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -19,6 +22,15 @@ from nano_agent.tools.base import (
 from nano_agent.tools.errors import ToolExecutionError, ToolInputError, ToolTimeoutError
 
 SCP_STYLE_SSH_URL = re.compile(r"^git@[^:\s]+:[^\s]+$")
+
+
+@dataclass
+class GitCommandResult:
+    """Result captured from one git subprocess execution."""
+
+    returncode: int  # Process exit code.
+    stdout: str  # Decoded standard output.
+    stderr: str  # Decoded standard error.
 
 
 class CloneRepoInput(ToolInput):
@@ -55,7 +67,7 @@ class CloneRepoTool(RuntimeTool):
             workspace.mkdir(parents=True)
 
         started = time.monotonic()
-        completed = self._run_git(
+        completed = await self._run_git(
             ["clone", "--depth", str(input_data["depth"]), "--", repo_url, "."],
             cwd=workspace,
             timeout=context.config.command_timeout_seconds,
@@ -75,9 +87,9 @@ class CloneRepoTool(RuntimeTool):
                 },
             )
 
-        commit = self._git_value(["rev-parse", "HEAD"], workspace, context)
-        branch = self._git_value(["branch", "--show-current"], workspace, context)
-        remote_url = self._git_value(["remote", "get-url", "origin"], workspace, context)
+        commit = await self._git_value(["rev-parse", "HEAD"], workspace, context)
+        branch = await self._git_value(["branch", "--show-current"], workspace, context)
+        remote_url = await self._git_value(["remote", "get-url", "origin"], workspace, context)
         return ToolResult(
             success=True,
             summary=f"cloned repository at commit {commit}",
@@ -90,8 +102,8 @@ class CloneRepoTool(RuntimeTool):
             },
         )
 
-    def _git_value(self, args: list[str], workspace: Path, context: ToolContext) -> str:
-        completed = self._run_git(
+    async def _git_value(self, args: list[str], workspace: Path, context: ToolContext) -> str:
+        completed = await self._run_git(
             args,
             cwd=workspace,
             timeout=context.config.command_timeout_seconds,
@@ -102,28 +114,53 @@ class CloneRepoTool(RuntimeTool):
             )
         return completed.stdout.strip()
 
-    def _run_git(
+    async def _run_git(
         self,
         args: list[str],
         *,
         cwd: Path,
         timeout: int,
-    ) -> subprocess.CompletedProcess[str]:
+    ) -> GitCommandResult:
         try:
-            return subprocess.run(
-                ["git", *args],
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                *args,
                 cwd=cwd,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-        except subprocess.TimeoutExpired as exc:
-            raise ToolTimeoutError(f"git command exceeded {timeout}s") from exc
         except FileNotFoundError as exc:
             raise ToolExecutionError("git executable was not found") from exc
         except OSError as exc:
             raise ToolExecutionError(f"failed to execute git: {exc}") from exc
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout,
+            )
+        except TimeoutError as exc:
+            await self._terminate_process_group(process)
+            raise ToolTimeoutError(f"git command exceeded {timeout}s") from exc
+        return GitCommandResult(
+            returncode=process.returncode or 0,
+            stdout=stdout_bytes.decode("utf-8", errors="replace"),
+            stderr=stderr_bytes.decode("utf-8", errors="replace"),
+        )
+
+    async def _terminate_process_group(self, process: asyncio.subprocess.Process) -> None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(process.communicate(), timeout=2)
+        except TimeoutError:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await process.communicate()
 
     def _validate_repo_url(self, repo_url: str) -> None:
         if repo_url.startswith("-") or any(ord(char) < 32 for char in repo_url):

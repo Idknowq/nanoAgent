@@ -1,4 +1,4 @@
-import subprocess
+import asyncio
 from pathlib import Path
 
 from nano_agent.config import AgentConfig
@@ -18,13 +18,33 @@ def make_context(tmp_path: Path) -> ToolContext:
     )
 
 
-def completed(stdout: str = "", stderr: str = "", returncode: int = 0):
-    return subprocess.CompletedProcess(
-        args=["git"],
-        returncode=returncode,
-        stdout=stdout,
-        stderr=stderr,
-    )
+class FakeGitProcess:
+    """Async subprocess stand-in used by clone_repo tests."""
+
+    def __init__(
+        self,
+        *,
+        stdout: str = "",
+        stderr: str = "",
+        returncode: int = 0,
+        timeout: bool = False,
+    ) -> None:
+        self.stdout = stdout.encode()
+        self.stderr = stderr.encode()
+        self.returncode = returncode
+        self.timeout = timeout
+        self.pid = 999_999
+        self.communicate_calls = 0
+
+    async def communicate(self):  # type: ignore[no-untyped-def]
+        self.communicate_calls += 1
+        if self.timeout and self.communicate_calls == 1:
+            raise TimeoutError
+        return self.stdout, self.stderr
+
+
+def completed(stdout: str = "", stderr: str = "", returncode: int = 0) -> FakeGitProcess:
+    return FakeGitProcess(stdout=stdout, stderr=stderr, returncode=returncode)
 
 
 async def test_clone_repo_clones_and_returns_repository_metadata(tmp_path: Path, monkeypatch) -> None:
@@ -38,11 +58,12 @@ async def test_clone_repo_clones_and_returns_repository_metadata(tmp_path: Path,
     )
     calls: list[list[str]] = []
 
-    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
-        calls.append(argv)
+    async def fake_create_subprocess_exec(*argv, **kwargs):  # type: ignore[no-untyped-def]
+        del kwargs
+        calls.append(list(argv))
         return next(responses)
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     context = make_context(tmp_path)
 
     result = await CloneRepoTool().invoke({"repo_url": REPO_URL, "depth": 1}, context)
@@ -82,10 +103,14 @@ async def test_clone_repo_rejects_untrusted_or_mismatched_url(tmp_path: Path) ->
 
 
 async def test_clone_repo_returns_git_failure_details(tmp_path: Path, monkeypatch) -> None:
+    async def fake_create_subprocess_exec(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return completed(stderr="authentication failed", returncode=128)
+
     monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *args, **kwargs: completed(stderr="authentication failed", returncode=128),
+        asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
     )
 
     result = await CloneRepoTool().invoke({"repo_url": REPO_URL}, make_context(tmp_path))
@@ -97,10 +122,11 @@ async def test_clone_repo_returns_git_failure_details(tmp_path: Path, monkeypatc
 
 
 async def test_clone_repo_returns_timeout(tmp_path: Path, monkeypatch) -> None:
-    def raise_timeout(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise subprocess.TimeoutExpired(cmd="git", timeout=120)
+    async def fake_create_subprocess_exec(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
+        return FakeGitProcess(timeout=True)
 
-    monkeypatch.setattr(subprocess, "run", raise_timeout)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
     result = await CloneRepoTool().invoke({"repo_url": REPO_URL}, make_context(tmp_path))
 
@@ -109,10 +135,11 @@ async def test_clone_repo_returns_timeout(tmp_path: Path, monkeypatch) -> None:
 
 
 async def test_clone_repo_returns_missing_git_error(tmp_path: Path, monkeypatch) -> None:
-    def raise_missing(*args, **kwargs):  # type: ignore[no-untyped-def]
+    async def raise_missing(*args, **kwargs):  # type: ignore[no-untyped-def]
+        del args, kwargs
         raise FileNotFoundError
 
-    monkeypatch.setattr(subprocess, "run", raise_missing)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", raise_missing)
 
     result = await CloneRepoTool().invoke({"repo_url": REPO_URL}, make_context(tmp_path))
 

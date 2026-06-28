@@ -20,12 +20,13 @@
 - Step 2：`AgentLoop` 已拆出单个 tool execution 边界，并保持 LLM、tool、hook、finalization、background idle wait 的协议顺序。
 - Step 3：同一轮 LLM 返回的安全 tool batch 已支持可控并发，结果仍按原始 `tool_uses` 顺序写回。
 - Step 4：`run_command` 已迁移到 `asyncio.create_subprocess_exec()`；`read_file`、`list_files`、`grep` 的阻塞文件 I/O 已通过 `asyncio.to_thread()` 移出 event loop。
+- Step 5：hooks 已收敛到 `HookPipeline`，`AgentLoop` 不再直接遍历 hook list，hook 错误通知和注入消息顺序集中维护。
+- Step 6：OpenAI-compatible provider 已迁移到 `AsyncOpenAI`，真实 LLM 网络调用不会阻塞 event loop。
+- Step 7A：`clone_repo` 已迁移到 `asyncio.create_subprocess_exec()`，git clone 和元数据查询不再使用同步 `subprocess.run()`。
 
 仍未完成：
 
-- hooks 仍由 `AgentLoop` 分散调用，缺少统一的异步 pipeline。
-- OpenAI-compatible provider 仍需确认是否使用异步 SDK。
-- `clone_repo` 和执行环境准备中的外部进程仍需迁移到 asyncio subprocess。
+- 执行环境准备中的外部进程仍需迁移到 asyncio subprocess。
 - 持久化、task service、background supervisor 仍存在同步锁或线程池模型。
 - MCP 尚未接入。
 
@@ -288,6 +289,8 @@ hooks 顺序：
 
 ## Step 6：迁移 LLM provider 到真正异步网络调用
 
+状态：已完成。
+
 涉及模块：
 
 - `nano_agent/services/openai_compatible.py`
@@ -298,11 +301,12 @@ hooks 顺序：
 
 重构内容：
 
-- OpenAI-compatible provider 改用异步 SDK 或异步 HTTP client。
+- OpenAI-compatible provider 改用 `AsyncOpenAI`。
 - `complete()` 保持 async 协议，内部不再通过同步 client 阻塞 event loop。
 - 错误归一化逻辑保持一致。
 - transient retry 继续使用 async sleep。
 - 确认 usage、tool call parsing、invalid response、max_tokens handling 与当前行为一致。
+- 增加 provider 等待期间不阻塞 event loop 的测试。
 
 重构后的结果：
 
@@ -311,6 +315,8 @@ hooks 顺序：
 - provider 层不再保留同步网络调用路径。
 
 ## Step 7：迁移剩余内置工具和运行环境准备
+
+状态：进行中，Step 7A 已完成。
 
 涉及模块：
 
@@ -326,7 +332,7 @@ hooks 顺序：
 
 重构内容：
 
-- `clone_repo` 使用 `asyncio.create_subprocess_exec()` 执行 git，并保留 timeout、stderr/stdout tail、工作区空目录约束和错误分类。
+- `clone_repo` 使用 `asyncio.create_subprocess_exec()` 执行 git，并保留 timeout、stderr/stdout tail、工作区空目录约束和错误分类。已完成。
 - `runtime/environment.py` 中需要执行外部命令的逻辑改为 async subprocess。
 - 对文件写入、skill 读取、task 工具和 delegate 工具进行阻塞点审计：
   - 短文件 I/O 可暂时保留同步实现。
@@ -339,6 +345,11 @@ hooks 顺序：
 - 内置工具不会在长时间子进程或重 I/O 上阻塞 event loop。
 - 工具权限、workspace containment、输入校验和 `ToolResult` 格式不变。
 - 为 task service 和 background supervisor 的 async 化清理工具层依赖。
+
+剩余工作：
+
+- Step 7B：迁移 `runtime/environment.py` 中的同步外部命令。
+- 审计 `edit_file`、`activate_skill`、task tools、delegate tools 和 `finish_run` 的阻塞点。
 
 ## Step 8：整理 ContextCompactor 和持久化异步边界
 
