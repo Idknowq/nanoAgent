@@ -4,7 +4,7 @@ import json
 import os
 from typing import Any
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from nano_agent.config import AgentConfig
 from nano_agent.models import (
@@ -27,7 +27,7 @@ class OpenAICompatibleLLMClient:
 
     def __init__(
         self,
-        client: OpenAI,
+        client: AsyncOpenAI,
         model: str,
         provider: str = "openai_compatible",
         *,
@@ -58,7 +58,7 @@ class OpenAICompatibleLLMClient:
         if not api_key:
             raise RuntimeError("DEEPSEEK_API_KEY is not set in environment or .env")
         return cls(
-            client=OpenAI(
+            client=AsyncOpenAI(
                 api_key=api_key,
                 base_url=base_url,
                 timeout=request_timeout_seconds,
@@ -91,7 +91,7 @@ class OpenAICompatibleLLMClient:
                 }
             }
         try:
-            response = self.client.chat.completions.create(**request)
+            response = await self.client.chat.completions.create(**request)
         except Exception as exc:
             raise normalize_llm_error(exc) from exc
 

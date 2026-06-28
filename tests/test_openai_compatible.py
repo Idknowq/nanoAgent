@@ -1,6 +1,8 @@
+import asyncio
+import time
 from types import SimpleNamespace
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 import pytest
 
@@ -17,7 +19,7 @@ class FakeCompletions:
     def __init__(self) -> None:
         self.last_request = None  # 保存最近一次 create 调用参数。
 
-    def create(self, **kwargs):  # type: ignore[no-untyped-def]
+    async def create(self, **kwargs):  # type: ignore[no-untyped-def]
         self.last_request = kwargs
         tool_call = SimpleNamespace(
             id="call_1",
@@ -78,7 +80,7 @@ async def test_openai_compatible_client_parses_tool_calls() -> None:
 
 
 async def test_openai_message_conversion_preserves_assistant_tool_calls() -> None:
-    client = OpenAICompatibleLLMClient(client=OpenAI(api_key="test"), model="test")
+    client = OpenAICompatibleLLMClient(client=AsyncOpenAI(api_key="test"), model="test")
     message = AgentMessage(
         role="assistant",
         content="call tool",
@@ -146,7 +148,7 @@ async def test_openai_client_records_bounded_invalid_tool_call_arguments() -> No
 
 async def test_openai_client_retries_insufficient_system_resource() -> None:
     class ResourceLimitedCompletions:
-        def create(self, **kwargs):  # type: ignore[no-untyped-def]
+        async def create(self, **kwargs):  # type: ignore[no-untyped-def]
             del kwargs
             message = SimpleNamespace(content="", tool_calls=[])
             choice = SimpleNamespace(
@@ -165,6 +167,29 @@ async def test_openai_client_retries_insufficient_system_resource() -> None:
 
     assert captured.value.kind == LLMErrorKind.OVERLOADED
     assert captured.value.retryable
+
+
+async def test_openai_client_wait_does_not_block_event_loop() -> None:
+    class SlowCompletions:
+        async def create(self, **kwargs):  # type: ignore[no-untyped-def]
+            del kwargs
+            await asyncio.sleep(0.2)
+            message = SimpleNamespace(content="done", tool_calls=[])
+            choice = SimpleNamespace(message=message, finish_reason="stop")
+            return SimpleNamespace(choices=[choice], model="deepseek-test", usage=None)
+
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SlowCompletions()))
+    client = OpenAICompatibleLLMClient(client=fake, model="deepseek-test")  # type: ignore[arg-type]
+
+    started = time.monotonic()
+    task = asyncio.create_task(client.complete([AgentMessage(role="user", content="start")], []))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
+    elapsed = time.monotonic() - started
+    response = await task
+
+    assert elapsed < 0.15
+    assert response.stop_reason == LLMStopReason.END_TURN
 
 
 @pytest.mark.parametrize(
