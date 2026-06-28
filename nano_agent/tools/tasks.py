@@ -54,7 +54,7 @@ class TaskCreateTool(RuntimeTool):
     def __init__(self, service: TaskService) -> None:
         self.service = service  # 当前主运行绑定的 Task 业务服务。
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         del context
         task = self.service.create(
             subject=input_data["subject"],
@@ -83,7 +83,7 @@ class TaskGetTool(RuntimeTool):
     def __init__(self, service: TaskService) -> None:
         self.service = service  # 当前主运行绑定的 Task 业务服务。
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         del context
         task = self.service.get(input_data["task_id"])
         return ToolResult(
@@ -109,7 +109,7 @@ class TaskListTool(RuntimeTool):
     def __init__(self, service: TaskService) -> None:
         self.service = service  # 当前主运行绑定的 Task 业务服务。
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         del context
         tasks = self.service.list(input_data["status"])
         return ToolResult(
@@ -137,7 +137,7 @@ class TaskUpdateTool(RuntimeTool):
     def __init__(self, service: TaskService) -> None:
         self.service = service  # 当前主运行绑定的 Task 业务服务。
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         del context
         task_id = input_data.pop("task_id")
         task = self.service.update(task_id, **input_data)

@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import shutil
 import sys
@@ -148,7 +149,7 @@ def run_one(experiment: Experiment, repo_url: str, task: str, *, timeout: int = 
 
     started = time.monotonic()
     try:
-        result = agent.run(repo_url=repo_url, user_request=task)
+        result = asyncio.run(agent.run(repo_url=repo_url, user_request=task))
         duration = time.monotonic() - started
         run_dir = config.runs_root / result.run_id
 

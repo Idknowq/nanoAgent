@@ -17,7 +17,7 @@ class HookResult(BaseModel):
 class AgentHook(Protocol):
     """Agent loop 扩展点协议，用于权限、审计、错误恢复等机制。"""
 
-    def before_llm_call(
+    async def before_llm_call(
         self,
         context: ToolContext,
         messages: list[AgentMessage],
@@ -25,14 +25,14 @@ class AgentHook(Protocol):
     ) -> HookResult | None:
         """LLM 调用前触发。"""
 
-    def after_llm_call(
+    async def after_llm_call(
         self,
         context: ToolContext,
         response: LLMResponse,
     ) -> HookResult | None:
         """LLM 调用后触发。"""
 
-    def before_tool_call(
+    async def before_tool_call(
         self,
         context: ToolContext,
         tool: RuntimeTool,
@@ -40,7 +40,7 @@ class AgentHook(Protocol):
     ) -> HookResult | None:
         """工具调用前触发。"""
 
-    def after_tool_call(
+    async def after_tool_call(
         self,
         context: ToolContext,
         tool: RuntimeTool,
@@ -50,14 +50,14 @@ class AgentHook(Protocol):
     ) -> HookResult | None:
         """工具调用后触发。"""
 
-    def on_error(self, context: ToolContext, error: Exception) -> HookResult | None:
+    async def on_error(self, context: ToolContext, error: Exception) -> HookResult | None:
         """Agent loop 捕获错误时触发。"""
 
 
 class NoOpHook:
     """默认空 hook，提供可选扩展点的稳定实现。"""
 
-    def before_llm_call(
+    async def before_llm_call(
         self,
         context: ToolContext,
         messages: list[AgentMessage],
@@ -65,14 +65,14 @@ class NoOpHook:
     ) -> HookResult | None:
         return None
 
-    def after_llm_call(
+    async def after_llm_call(
         self,
         context: ToolContext,
         response: LLMResponse,
     ) -> HookResult | None:
         return None
 
-    def before_tool_call(
+    async def before_tool_call(
         self,
         context: ToolContext,
         tool: RuntimeTool,
@@ -80,7 +80,7 @@ class NoOpHook:
     ) -> HookResult | None:
         return None
 
-    def after_tool_call(
+    async def after_tool_call(
         self,
         context: ToolContext,
         tool: RuntimeTool,
@@ -90,5 +90,5 @@ class NoOpHook:
     ) -> HookResult | None:
         return None
 
-    def on_error(self, context: ToolContext, error: Exception) -> HookResult | None:
+    async def on_error(self, context: ToolContext, error: Exception) -> HookResult | None:
         return None

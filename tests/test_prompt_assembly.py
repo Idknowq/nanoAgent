@@ -50,7 +50,7 @@ class ActivateThenFinishLLM:
         self.calls = 0  # 记录测试 LLM 已完成的调用次数。
         self.second_call_messages: list[AgentMessage] = []  # 第二轮收到的完整消息。
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         if self.calls == 1:
             return LLMResponse(
@@ -68,7 +68,7 @@ class ActivateThenFinishLLM:
         return LLMResponse(content="done", stop_reason="end_turn")
 
 
-def test_prompt_assembler_keeps_stable_core_and_exposes_only_skill_metadata(
+async def test_prompt_assembler_keeps_stable_core_and_exposes_only_skill_metadata(
     tmp_path: Path,
 ) -> None:
     skill_root = tmp_path / "skills"
@@ -103,7 +103,7 @@ def test_prompt_assembler_keeps_stable_core_and_exposes_only_skill_metadata(
     assert "Skills are optional procedural guidance" in catalog.content
 
 
-def test_prompt_assembler_selectively_injects_memory(tmp_path: Path) -> None:
+async def test_prompt_assembler_selectively_injects_memory(tmp_path: Path) -> None:
     store = JsonlMemoryStore(tmp_path / "memory.jsonl")
     matching = MemoryRecord(
         namespace="repo",
@@ -126,7 +126,7 @@ def test_prompt_assembler_selectively_injects_memory(tmp_path: Path) -> None:
     assert bundle.memory_keys == ["repo:test-command"]
 
 
-def test_skill_registry_parses_metadata_without_loading_body(tmp_path: Path) -> None:
+async def test_skill_registry_parses_metadata_without_loading_body(tmp_path: Path) -> None:
     skill_root = tmp_path / "skills"
     path = write_skill(skill_root, "python-repository")
     parser = SkillParser()
@@ -141,7 +141,7 @@ def test_skill_registry_parses_metadata_without_loading_body(tmp_path: Path) -> 
     assert loaded.content_sha256
 
 
-def test_builtin_skills_define_current_repair_workflows() -> None:
+async def test_builtin_skills_define_current_repair_workflows() -> None:
     skill_root = Path(__file__).parents[1] / "nano_agent" / "skills" / "builtin"
     registry = SkillRegistry(skill_root)
 
@@ -159,7 +159,7 @@ def test_builtin_skills_define_current_repair_workflows() -> None:
     assert "hosted GitHub Actions run" in actions_skill.content
 
 
-def test_skill_registry_rejects_invalid_frontmatter_and_name_mismatch(tmp_path: Path) -> None:
+async def test_skill_registry_rejects_invalid_frontmatter_and_name_mismatch(tmp_path: Path) -> None:
     skill_root = tmp_path / "skills"
     invalid_dir = skill_root / "invalid"
     invalid_dir.mkdir(parents=True)
@@ -175,7 +175,7 @@ def test_skill_registry_rejects_invalid_frontmatter_and_name_mismatch(tmp_path: 
         )
 
 
-def test_activate_skill_loads_body_for_next_llm_call_and_persists_record(
+async def test_activate_skill_loads_body_for_next_llm_call_and_persists_record(
     tmp_path: Path,
 ) -> None:
     skill_root = tmp_path / "skills"
@@ -208,7 +208,7 @@ def test_activate_skill_loads_body_for_next_llm_call_and_persists_record(
         )
     ).messages
 
-    result = loop.run(RunSummary(run_id="run-1", repo_url=context.repo_url), initial)
+    result = await loop.run(RunSummary(run_id="run-1", repo_url=context.repo_url), initial)
 
     assert result.status == "completed"
     assert any(body in message.content for message in llm.second_call_messages)
@@ -224,7 +224,7 @@ def test_activate_skill_loads_body_for_next_llm_call_and_persists_record(
     assert records[0]["newly_activated"]
 
 
-def test_activate_skill_does_not_inject_body_twice(tmp_path: Path) -> None:
+async def test_activate_skill_does_not_inject_body_twice(tmp_path: Path) -> None:
     skill_root = tmp_path / "skills"
     write_skill(skill_root, "python-repository")
     session = SkillSession(SkillRegistry(skill_root))
@@ -243,10 +243,10 @@ def test_activate_skill_does_not_inject_body_twice(tmp_path: Path) -> None:
         input={"name": "python-repository"},
     )
 
-    first = tool.invoke(tool_use.input, context)
-    first_hook = hook.after_tool_call(context, tool, tool_use, first, 0.0)
-    second = tool.invoke(tool_use.input, context)
-    second_hook = hook.after_tool_call(context, tool, tool_use, second, 0.0)
+    first = await tool.invoke(tool_use.input, context)
+    first_hook = await hook.after_tool_call(context, tool, tool_use, first, 0.0)
+    second = await tool.invoke(tool_use.input, context)
+    second_hook = await hook.after_tool_call(context, tool, tool_use, second, 0.0)
 
     assert first.data["newly_activated"]
     assert first_hook is not None
@@ -254,7 +254,7 @@ def test_activate_skill_does_not_inject_body_twice(tmp_path: Path) -> None:
     assert second_hook is None
 
 
-def test_compaction_state_builder_extracts_bounded_tool_evidence(tmp_path: Path) -> None:
+async def test_compaction_state_builder_extracts_bounded_tool_evidence(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     (workspace / ".git").mkdir(parents=True)
     messages = [

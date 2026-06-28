@@ -172,7 +172,7 @@ class ConsoleProgressHook(NoOpHook):
     def render_errors(self) -> list[str]:
         return list(self._render_errors)
 
-    def before_llm_call(self, context, messages, tools) -> HookResult | None:  # type: ignore[no-untyped-def]
+    async def before_llm_call(self, context, messages, tools) -> HookResult | None:  # type: ignore[no-untyped-def]
         self._render_event(
             context,
             ConsoleEventType.LLM_STARTED,
@@ -182,7 +182,7 @@ class ConsoleProgressHook(NoOpHook):
         )
         return None
 
-    def after_llm_call(
+    async def after_llm_call(
         self,
         context: ToolContext,
         response: LLMResponse,
@@ -202,7 +202,7 @@ class ConsoleProgressHook(NoOpHook):
         )
         return None
 
-    def before_tool_call(
+    async def before_tool_call(
         self,
         context: ToolContext,
         tool: RuntimeTool,
@@ -216,7 +216,7 @@ class ConsoleProgressHook(NoOpHook):
         )
         return None
 
-    def after_tool_call(
+    async def after_tool_call(
         self,
         context: ToolContext,
         tool: RuntimeTool,
@@ -235,7 +235,7 @@ class ConsoleProgressHook(NoOpHook):
         self._render_sections(context, tool=tool, tool_use=tool_use, result=result)
         return None
 
-    def on_error(self, context: ToolContext, error: Exception) -> HookResult | None:
+    async def on_error(self, context: ToolContext, error: Exception) -> HookResult | None:
         self._render_event(
             context,
             ConsoleEventType.ERROR,

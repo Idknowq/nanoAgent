@@ -61,7 +61,7 @@ def test_cli_prints_compact_status_without_summary_content(monkeypatch, tmp_path
 
     received: dict[str, str] = {}
 
-    def fake_run(self, repo_url: str, user_request: str) -> RunSummary:  # type: ignore[no-untyped-def]
+    async def fake_run(self, repo_url: str, user_request: str) -> RunSummary:  # type: ignore[no-untyped-def]
         received["repo_url"] = repo_url
         received["user_request"] = user_request
         return result

@@ -8,7 +8,7 @@ from nano_agent.skills.registry import SkillRegistry
 from nano_agent.workspace import WorkspaceManager
 
 
-def test_core_components_can_be_constructed(tmp_path) -> None:  # type: ignore[no-untyped-def]
+async def test_core_components_can_be_constructed(tmp_path) -> None:  # type: ignore[no-untyped-def]
     config = AgentConfig(workspace_root=tmp_path / "workspaces", runs_root=tmp_path / "runs")
 
     agent = NanoAgent(config=config)

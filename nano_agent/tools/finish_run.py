@@ -41,7 +41,7 @@ class FinishRunTool(RuntimeTool):
     def __init__(self, active_jobs_provider: Callable[[], bool] | None = None) -> None:
         self.active_jobs_provider = active_jobs_provider  # 查询当前主运行是否仍有后台 Job。
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         del context
         if self.active_jobs_provider is not None and self.active_jobs_provider():
             return ToolResult.failure(

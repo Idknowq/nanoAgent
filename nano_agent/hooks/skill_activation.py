@@ -14,7 +14,7 @@ class SkillActivationHook(NoOpHook):
     def __init__(self, session: SkillSession) -> None:
         self.session = session  # 保存当前 run 已成功激活的 Skill。
 
-    def after_tool_call(
+    async def after_tool_call(
         self,
         context: ToolContext,
         tool: RuntimeTool,

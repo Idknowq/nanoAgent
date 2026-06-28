@@ -17,7 +17,7 @@ from nano_agent.models import ApprovalLevel
         ApprovalLevel.EXECUTE_SAFE,
     ],
 )
-def test_default_policy_allows_non_sensitive_levels(level: ApprovalLevel) -> None:
+async def test_default_policy_allows_non_sensitive_levels(level: ApprovalLevel) -> None:
     assert not PermissionPolicy().requires_approval(level)
 
 
@@ -29,11 +29,11 @@ def test_default_policy_allows_non_sensitive_levels(level: ApprovalLevel) -> Non
         ApprovalLevel.PUBLISH,
     ],
 )
-def test_default_policy_requires_approval_for_sensitive_levels(level: ApprovalLevel) -> None:
+async def test_default_policy_requires_approval_for_sensitive_levels(level: ApprovalLevel) -> None:
     assert PermissionPolicy().requires_approval(level)
 
 
-def test_allow_command_only_adds_risky_execution() -> None:
+async def test_allow_command_only_adds_risky_execution() -> None:
     hook = build_default_hooks(AgentConfig(allow_command=True))[0]
 
     assert isinstance(hook, PermissionHook)
@@ -42,7 +42,7 @@ def test_allow_command_only_adds_risky_execution() -> None:
     assert hook.policy.requires_approval(ApprovalLevel.PUBLISH)
 
 
-def test_allow_write_only_adds_write_permission() -> None:
+async def test_allow_write_only_adds_write_permission() -> None:
     hook = build_default_hooks(AgentConfig(allow_write=True))[0]
 
     assert isinstance(hook, PermissionHook)
@@ -51,7 +51,7 @@ def test_allow_write_only_adds_write_permission() -> None:
     assert hook.policy.requires_approval(ApprovalLevel.PUBLISH)
 
 
-def test_allow_flags_can_be_combined() -> None:
+async def test_allow_flags_can_be_combined() -> None:
     hook = build_default_hooks(AgentConfig(allow_command=True, allow_write=True))[0]
 
     assert isinstance(hook, PermissionHook)
@@ -60,7 +60,7 @@ def test_allow_flags_can_be_combined() -> None:
     assert hook.policy.requires_approval(ApprovalLevel.PUBLISH)
 
 
-def test_default_hook_allows_clone_and_safe_execution() -> None:
+async def test_default_hook_allows_clone_and_safe_execution() -> None:
     hook = build_default_hooks(AgentConfig())[0]
 
     assert isinstance(hook, PermissionHook)
@@ -69,7 +69,7 @@ def test_default_hook_allows_clone_and_safe_execution() -> None:
     assert hook.policy.requires_approval(ApprovalLevel.EXECUTE_RISKY)
 
 
-def test_default_hooks_include_observability_hooks() -> None:
+async def test_default_hooks_include_observability_hooks() -> None:
     hooks = build_default_hooks(AgentConfig())
 
     assert isinstance(hooks[0], PermissionHook)
@@ -78,19 +78,19 @@ def test_default_hooks_include_observability_hooks() -> None:
     assert isinstance(hooks[3], AuditHook)
 
 
-def test_audit_hook_can_be_disabled() -> None:
+async def test_audit_hook_can_be_disabled() -> None:
     hooks = build_default_hooks(AgentConfig(audit_enabled=False))
 
     assert not any(isinstance(hook, AuditHook) for hook in hooks)
 
 
-def test_llm_metrics_hook_can_be_disabled() -> None:
+async def test_llm_metrics_hook_can_be_disabled() -> None:
     hooks = build_default_hooks(AgentConfig(llm_calls_enabled=False))
 
     assert not any(isinstance(hook, LLMMetricsHook) for hook in hooks)
 
 
-def test_console_progress_hook_can_be_disabled() -> None:
+async def test_console_progress_hook_can_be_disabled() -> None:
     hooks = build_default_hooks(AgentConfig(console_progress_enabled=False))
 
     assert not any(isinstance(hook, ConsoleProgressHook) for hook in hooks)

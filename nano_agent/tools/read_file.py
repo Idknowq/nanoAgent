@@ -60,7 +60,7 @@ class ReadFileTool(RuntimeTool):
     input_model = ReadFileInput
     input_schema = ReadFileInput.model_json_schema()
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         try:
             path = resolve_workspace_path(
                 context.workspace_path,

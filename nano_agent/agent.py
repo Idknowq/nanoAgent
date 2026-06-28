@@ -56,7 +56,7 @@ class NanoAgent:
         self.prompt_store = PromptStore()  # 持久化本次 prompt 的组装元数据。
         self.report_store = ReportStore()  # 渲染并保存最终 Markdown 报告。
 
-    def run(self, repo_url: str, user_request: str) -> RunSummary:
+    async def run(self, repo_url: str, user_request: str) -> RunSummary:
         run = self.workspace_manager.create_run(repo_url=repo_url)
         run.status = RunStatus.RUNNING
         supervisor: BackgroundJobSupervisor | None = None  # 当前主运行的后台调度器。
@@ -161,7 +161,7 @@ class NanoAgent:
                 compactor=compactor,
                 idle_waiter=supervisor.wait_for_completion if supervisor is not None else None,
             )
-            run = loop.run(run=run, initial_messages=prompt_bundle.messages)
+            run = await loop.run(run=run, initial_messages=prompt_bundle.messages)
         except Exception as exc:  # noqa: BLE001 - top-level agent boundary should capture failures.
             run.status = RunStatus.FAILED
             run.notes.append(f"Agent failed: {exc}")

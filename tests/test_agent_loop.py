@@ -19,13 +19,27 @@ from nano_agent.tools.run_command import RunCommandTool
 from nano_agent.tools.todo import TodoWriteTool
 
 
+def record_sleep(delays: list[float]):
+    """Return an async sleeper that records requested retry delays."""
+
+    async def sleeper(delay: float) -> None:
+        delays.append(delay)
+
+    return sleeper
+
+
+async def noop_sleep(delay: float) -> None:
+    """Async sleeper used by tests that should not wait."""
+    del delay
+
+
 class OneToolUseLLM:
     """测试用 LLM，第一轮请求工具，第二轮结束。"""
 
     def __init__(self) -> None:
         self.calls = 0  # 记录 LLM 被调用次数。
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         if self.calls == 1:
             return LLMResponse(
@@ -48,7 +62,7 @@ class InvalidToolUseLLM:
         self.tool_name = tool_name
         self.input_data = input_data
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         if self.calls == 1:
             return LLMResponse(
@@ -66,16 +80,16 @@ class RecordingHook(NoOpHook):
     def __init__(self) -> None:
         self.events: list[str] = []  # 保存 hook 调用事件名称。
 
-    def before_llm_call(self, context, messages, tools):  # type: ignore[no-untyped-def]
+    async def before_llm_call(self, context, messages, tools):  # type: ignore[no-untyped-def]
         self.events.append("before_llm_call")
 
-    def after_llm_call(self, context, response):  # type: ignore[no-untyped-def]
+    async def after_llm_call(self, context, response):  # type: ignore[no-untyped-def]
         self.events.append("after_llm_call")
 
-    def before_tool_call(self, context, tool, tool_use):  # type: ignore[no-untyped-def]
+    async def before_tool_call(self, context, tool, tool_use):  # type: ignore[no-untyped-def]
         self.events.append("before_tool_call")
 
-    def after_tool_call(  # type: ignore[no-untyped-def]
+    async def after_tool_call(  # type: ignore[no-untyped-def]
         self,
         context,
         tool,
@@ -88,7 +102,7 @@ class RecordingHook(NoOpHook):
 
 
 class ReminderHook(NoOpHook):
-    def before_tool_call(self, context, tool, tool_use):  # type: ignore[no-untyped-def]
+    async def before_tool_call(self, context, tool, tool_use):  # type: ignore[no-untyped-def]
         return HookResult(
             injected_messages=[AgentMessage(role="system", content=f"Reminder for {tool_use.name}")]
         )
@@ -101,7 +115,7 @@ class PromptTooLongThenFinishLLM:
         self.calls = 0  # 记录包含失败请求在内的调用次数。
         self.request_sizes: list[int] = []  # 保存每次请求的消息数量。
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         self.request_sizes.append(len(messages))
         if self.calls == 1:
@@ -115,7 +129,7 @@ class TransientThenFinishLLM:
         self.failures = failures
         self.error = error
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         if self.calls <= self.failures:
             raise self.error
@@ -128,7 +142,7 @@ class TruncatedThenFinishLLM:
         self.truncated_tool_call = truncated_tool_call
         self.requests: list[list[AgentMessage]] = []
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         self.requests.append([message.model_copy(deep=True) for message in messages])
         if self.calls == 1:
@@ -145,7 +159,7 @@ class AlwaysTruncatedLLM:
     def __init__(self) -> None:
         self.calls = 0
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         return LLMResponse(content=f"partial-{self.calls}", stop_reason="max_tokens")
 
@@ -154,7 +168,7 @@ class AlwaysPromptTooLongLLM:
     def __init__(self) -> None:
         self.calls = 0
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         raise LLMServiceError(
             "maximum context length exceeded",
@@ -169,7 +183,7 @@ class InvalidResponseThenFinishLLM:
         self.failures = failures  # 返回非法响应的次数。
         self.requests: list[list[AgentMessage]] = []  # 保存每次请求的消息快照。
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         self.requests.append([message.model_copy(deep=True) for message in messages])
         if self.calls <= self.failures:
@@ -182,7 +196,7 @@ class InvalidResponseThenFinishLLM:
         return LLMResponse(content="recovered", stop_reason="end_turn")
 
 
-def test_agent_loop_executes_tool_and_records_result(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+async def test_agent_loop_executes_tool_and_records_result(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
     llm: LLMClient = OneToolUseLLM()
     config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5)
     context = ToolContext(
@@ -196,7 +210,7 @@ def test_agent_loop_executes_tool_and_records_result(tmp_path: Path, capsys) -> 
     loop = AgentLoop(config=config, llm=llm, tools=tools, context=context)
     run = RunSummary(run_id="test", repo_url="https://example.com/repo.git")
 
-    result = loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
+    result = await loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
 
     assert result.status == "completed"
     assert result.tool_calls[0].tool_name == "run_command"
@@ -205,7 +219,7 @@ def test_agent_loop_executes_tool_and_records_result(tmp_path: Path, capsys) -> 
     assert capsys.readouterr().out == ""
 
 
-def test_agent_loop_retries_once_after_reactive_compaction(tmp_path: Path) -> None:
+async def test_agent_loop_retries_once_after_reactive_compaction(tmp_path: Path) -> None:
     config = AgentConfig(
         context_max_input_tokens=100_000,
         reactive_keep_recent_messages=2,
@@ -243,7 +257,7 @@ def test_agent_loop_retries_once_after_reactive_compaction(tmp_path: Path) -> No
         ],
     ]
 
-    result = loop.run(
+    result = await loop.run(
         RunSummary(run_id="test", repo_url=context.repo_url),
         initial,
     )
@@ -256,7 +270,7 @@ def test_agent_loop_retries_once_after_reactive_compaction(tmp_path: Path) -> No
     assert compactor.reactive_compact_attempts == 1
 
 
-def test_agent_loop_retries_transient_errors_with_exponential_backoff(tmp_path: Path) -> None:
+async def test_agent_loop_retries_transient_errors_with_exponential_backoff(tmp_path: Path) -> None:
     config = AgentConfig(
         llm_max_transient_retries=3,
         llm_retry_base_seconds=1,
@@ -285,10 +299,10 @@ def test_agent_loop_retries_transient_errors_with_exponential_backoff(tmp_path: 
             max_seconds=8,
             jitter_seconds=0,
         ),
-        sleeper=delays.append,
+        sleeper=record_sleep(delays),
     )
 
-    result = loop.run(
+    result = await loop.run(
         RunSummary(run_id="test", repo_url=context.repo_url),
         [AgentMessage(role="user", content="start")],
     )
@@ -301,7 +315,7 @@ def test_agent_loop_retries_transient_errors_with_exponential_backoff(tmp_path: 
     assert context.current_llm_call_id == "llm-1-transient-2"
 
 
-def test_agent_loop_prefers_retry_after_header_delay(tmp_path: Path) -> None:
+async def test_agent_loop_prefers_retry_after_header_delay(tmp_path: Path) -> None:
     config = AgentConfig(llm_max_transient_retries=1)
     context = ToolContext(
         run_id="test",
@@ -325,10 +339,10 @@ def test_agent_loop_prefers_retry_after_header_delay(tmp_path: Path) -> None:
         llm=llm,  # type: ignore[arg-type]
         tools=ToolRegistry(),
         context=context,
-        sleeper=delays.append,
+        sleeper=record_sleep(delays),
     )
 
-    loop.run(
+    await loop.run(
         RunSummary(run_id="test", repo_url=context.repo_url),
         [AgentMessage(role="user", content="start")],
     )
@@ -336,7 +350,7 @@ def test_agent_loop_prefers_retry_after_header_delay(tmp_path: Path) -> None:
     assert delays == [3.5]
 
 
-def test_agent_loop_does_not_retry_non_transient_error(tmp_path: Path) -> None:
+async def test_agent_loop_does_not_retry_non_transient_error(tmp_path: Path) -> None:
     config = AgentConfig(llm_max_transient_retries=3)
     context = ToolContext(
         run_id="test",
@@ -358,11 +372,11 @@ def test_agent_loop_does_not_retry_non_transient_error(tmp_path: Path) -> None:
         llm=llm,  # type: ignore[arg-type]
         tools=ToolRegistry(),
         context=context,
-        sleeper=lambda _: None,
+        sleeper=noop_sleep,
     )
 
     with pytest.raises(LLMServiceError) as captured:
-        loop.run(
+        await loop.run(
             RunSummary(run_id="test", repo_url=context.repo_url),
             [AgentMessage(role="user", content="start")],
         )
@@ -371,7 +385,7 @@ def test_agent_loop_does_not_retry_non_transient_error(tmp_path: Path) -> None:
     assert llm.calls == 1
 
 
-def test_agent_loop_retries_invalid_response_once_with_repair_prompt(
+async def test_agent_loop_retries_invalid_response_once_with_repair_prompt(
     tmp_path: Path,
 ) -> None:
     config = AgentConfig()
@@ -390,7 +404,7 @@ def test_agent_loop_retries_invalid_response_once_with_repair_prompt(
         context=context,
     )
 
-    result = loop.run(
+    result = await loop.run(
         RunSummary(run_id="test", repo_url=context.repo_url),
         [AgentMessage(role="user", content="start")],
     )
@@ -405,7 +419,7 @@ def test_agent_loop_retries_invalid_response_once_with_repair_prompt(
     assert "Do not continue, reuse, or repair fragments" in repair_prompt.content
 
 
-def test_agent_loop_fails_after_second_invalid_response(tmp_path: Path) -> None:
+async def test_agent_loop_fails_after_second_invalid_response(tmp_path: Path) -> None:
     config = AgentConfig()
     context = ToolContext(
         run_id="test",
@@ -424,14 +438,14 @@ def test_agent_loop_fails_after_second_invalid_response(tmp_path: Path) -> None:
     run = RunSummary(run_id="test", repo_url=context.repo_url)
 
     with pytest.raises(LLMServiceError) as captured:
-        loop.run(run, [AgentMessage(role="user", content="start")])
+        await loop.run(run, [AgentMessage(role="user", content="start")])
 
     assert captured.value.kind == LLMErrorKind.INVALID_RESPONSE
     assert llm.calls == 2
     assert run.llm_call_count == 2
 
 
-def test_agent_loop_continues_after_output_truncation(tmp_path: Path) -> None:
+async def test_agent_loop_continues_after_output_truncation(tmp_path: Path) -> None:
     config = AgentConfig(llm_max_continuations=2)
     context = ToolContext(
         run_id="test",
@@ -448,7 +462,7 @@ def test_agent_loop_continues_after_output_truncation(tmp_path: Path) -> None:
         context=context,
     )
 
-    result = loop.run(
+    result = await loop.run(
         RunSummary(run_id="test", repo_url=context.repo_url),
         [AgentMessage(role="user", content="start")],
     )
@@ -466,7 +480,7 @@ def test_agent_loop_continues_after_output_truncation(tmp_path: Path) -> None:
     assert "Continue from where it stopped" in llm.requests[1][-1].content
 
 
-def test_agent_loop_regenerates_truncated_tool_call(tmp_path: Path) -> None:
+async def test_agent_loop_regenerates_truncated_tool_call(tmp_path: Path) -> None:
     config = AgentConfig(llm_max_continuations=1)
     context = ToolContext(
         run_id="test",
@@ -483,7 +497,7 @@ def test_agent_loop_regenerates_truncated_tool_call(tmp_path: Path) -> None:
         context=context,
     )
 
-    loop.run(
+    await loop.run(
         RunSummary(run_id="test", repo_url=context.repo_url),
         [AgentMessage(role="user", content="start")],
     )
@@ -491,7 +505,7 @@ def test_agent_loop_regenerates_truncated_tool_call(tmp_path: Path) -> None:
     assert "Regenerate the complete tool call" in llm.requests[1][-1].content
 
 
-def test_agent_loop_fails_after_continuation_limit(tmp_path: Path) -> None:
+async def test_agent_loop_fails_after_continuation_limit(tmp_path: Path) -> None:
     config = AgentConfig(llm_max_continuations=1)
     context = ToolContext(
         run_id="test",
@@ -510,14 +524,14 @@ def test_agent_loop_fails_after_continuation_limit(tmp_path: Path) -> None:
     run = RunSummary(run_id="test", repo_url=context.repo_url)
 
     with pytest.raises(LLMServiceError) as captured:
-        loop.run(run, [AgentMessage(role="user", content="start")])
+        await loop.run(run, [AgentMessage(role="user", content="start")])
 
     assert captured.value.kind == LLMErrorKind.OUTPUT_TRUNCATED
     assert run.steps == 1
     assert run.llm_call_count == 2
 
 
-def test_agent_loop_fails_when_prompt_is_still_too_long_after_reactive_compact(
+async def test_agent_loop_fails_when_prompt_is_still_too_long_after_reactive_compact(
     tmp_path: Path,
 ) -> None:
     config = AgentConfig(
@@ -559,7 +573,7 @@ def test_agent_loop_fails_when_prompt_is_still_too_long_after_reactive_compact(
     run = RunSummary(run_id="test", repo_url=context.repo_url)
 
     with pytest.raises(LLMServiceError) as captured:
-        loop.run(run, initial)
+        await loop.run(run, initial)
 
     assert captured.value.kind == LLMErrorKind.PROMPT_TOO_LONG
     assert llm.calls == 2
@@ -567,7 +581,7 @@ def test_agent_loop_fails_when_prompt_is_still_too_long_after_reactive_compact(
     assert compactor.reactive_compact_attempts == 1
 
 
-def test_agent_loop_does_not_retry_when_reactive_compact_cannot_reduce_context(
+async def test_agent_loop_does_not_retry_when_reactive_compact_cannot_reduce_context(
     tmp_path: Path,
 ) -> None:
     config = AgentConfig(context_max_input_tokens=100_000)
@@ -597,7 +611,7 @@ def test_agent_loop_does_not_retry_when_reactive_compact_cannot_reduce_context(
     )
 
     with pytest.raises(LLMServiceError, match="did not reduce"):
-        loop.run(
+        await loop.run(
             RunSummary(run_id="test", repo_url=context.repo_url),
             [
                 AgentMessage(role="system", content="core"),
@@ -608,7 +622,7 @@ def test_agent_loop_does_not_retry_when_reactive_compact_cannot_reduce_context(
     assert llm.calls == 1
 
 
-def test_agent_loop_persists_messages_in_protocol_order(tmp_path: Path) -> None:
+async def test_agent_loop_persists_messages_in_protocol_order(tmp_path: Path) -> None:
     config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5)
     context = ToolContext(
         run_id="test",
@@ -626,7 +640,7 @@ def test_agent_loop_persists_messages_in_protocol_order(tmp_path: Path) -> None:
         message_store=store,
     )
 
-    loop.run(
+    await loop.run(
         RunSummary(run_id="test", repo_url=context.repo_url),
         [AgentMessage(role="user", content="start")],
     )
@@ -644,7 +658,7 @@ def test_agent_loop_persists_messages_in_protocol_order(tmp_path: Path) -> None:
     assert records[-1]["llm_call_id"] == "llm-2"
 
 
-def test_agent_loop_calls_hooks(tmp_path: Path) -> None:
+async def test_agent_loop_calls_hooks(tmp_path: Path) -> None:
     llm: LLMClient = OneToolUseLLM()
     config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5)
     context = ToolContext(
@@ -659,7 +673,7 @@ def test_agent_loop_calls_hooks(tmp_path: Path) -> None:
     loop = AgentLoop(config=config, llm=llm, tools=tools, context=context, hooks=[hook])
     run = RunSummary(run_id="test", repo_url="https://example.com/repo.git")
 
-    loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
+    await loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
 
     assert "before_llm_call" in hook.events
     assert "after_llm_call" in hook.events
@@ -670,7 +684,7 @@ def test_agent_loop_calls_hooks(tmp_path: Path) -> None:
     assert context.max_steps == config.max_steps
 
 
-def test_agent_loop_appends_hook_reminders_after_tool_results(tmp_path: Path) -> None:
+async def test_agent_loop_appends_hook_reminders_after_tool_results(tmp_path: Path) -> None:
     config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5)
     context = ToolContext(
         run_id="test",
@@ -687,7 +701,7 @@ def test_agent_loop_appends_hook_reminders_after_tool_results(tmp_path: Path) ->
         hooks=[ReminderHook()],
     )
 
-    result = loop.run(
+    result = await loop.run(
         RunSummary(run_id="test", repo_url=context.repo_url),
         [AgentMessage(role="user", content="start")],
     )
@@ -697,7 +711,7 @@ def test_agent_loop_appends_hook_reminders_after_tool_results(tmp_path: Path) ->
     assert result.messages[3].content == "Reminder for run_command"
 
 
-def test_default_tool_registry_exposes_metadata(tmp_path: Path) -> None:
+async def test_default_tool_registry_exposes_metadata(tmp_path: Path) -> None:
     config = AgentConfig(workspace_root=tmp_path)
     context = ToolContext(
         run_id="test",
@@ -718,7 +732,7 @@ def test_default_tool_registry_exposes_metadata(tmp_path: Path) -> None:
     assert all(spec.name != "bash" for spec in specs)
 
 
-def test_permission_hook_rejects_unapproved_command(tmp_path: Path) -> None:
+async def test_permission_hook_rejects_unapproved_command(tmp_path: Path) -> None:
     llm: LLMClient = OneToolUseLLM()
     config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5)
     context = ToolContext(
@@ -739,10 +753,10 @@ def test_permission_hook_rejects_unapproved_command(tmp_path: Path) -> None:
     run = RunSummary(run_id="test", repo_url="https://example.com/repo.git")
 
     with pytest.raises(PermissionDeniedError):
-        loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
+        await loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
 
 
-def test_permission_hook_allows_command_when_enabled(tmp_path: Path) -> None:
+async def test_permission_hook_allows_command_when_enabled(tmp_path: Path) -> None:
     llm: LLMClient = OneToolUseLLM()
     config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5, allow_command=True)
     context = ToolContext(
@@ -762,12 +776,12 @@ def test_permission_hook_allows_command_when_enabled(tmp_path: Path) -> None:
     )
     run = RunSummary(run_id="test", repo_url="https://example.com/repo.git")
 
-    result = loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
+    result = await loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
 
     assert result.status == "completed"
 
 
-def test_todo_write_is_optional_tool() -> None:
+async def test_todo_write_is_optional_tool() -> None:
     config = AgentConfig()
     context = ToolContext(
         run_id="test",
@@ -778,13 +792,13 @@ def test_todo_write_is_optional_tool() -> None:
     )
     tool = TodoWriteTool()
 
-    result = tool.invoke({"action": "add", "title": "Inspect README"}, context)
+    result = await tool.invoke({"action": "add", "title": "Inspect README"}, context)
 
     assert result.success
     assert result.data["todos"][0]["title"] == "Inspect README"
 
 
-def test_agent_loop_returns_invalid_tool_input_to_llm(tmp_path: Path) -> None:
+async def test_agent_loop_returns_invalid_tool_input_to_llm(tmp_path: Path) -> None:
     config = AgentConfig(workspace_root=tmp_path)
     context = ToolContext(
         run_id="test",
@@ -801,7 +815,7 @@ def test_agent_loop_returns_invalid_tool_input_to_llm(tmp_path: Path) -> None:
         context=context,
     )
 
-    result = loop.run(
+    result = await loop.run(
         RunSummary(run_id="test", repo_url=context.repo_url),
         [AgentMessage(role="user", content="start")],
     )
@@ -811,7 +825,7 @@ def test_agent_loop_returns_invalid_tool_input_to_llm(tmp_path: Path) -> None:
     assert '"error_code": "invalid_input"' in result.messages[-2].content
 
 
-def test_agent_loop_returns_unknown_tool_to_llm(tmp_path: Path) -> None:
+async def test_agent_loop_returns_unknown_tool_to_llm(tmp_path: Path) -> None:
     config = AgentConfig(workspace_root=tmp_path)
     context = ToolContext(
         run_id="test",
@@ -828,7 +842,7 @@ def test_agent_loop_returns_unknown_tool_to_llm(tmp_path: Path) -> None:
         context=context,
     )
 
-    result = loop.run(
+    result = await loop.run(
         RunSummary(run_id="test", repo_url=context.repo_url),
         [AgentMessage(role="user", content="start")],
     )

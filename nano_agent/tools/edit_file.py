@@ -62,7 +62,7 @@ class EditFileTool(RuntimeTool):
             "expected_replacements": input_data.get("expected_replacements", 1),
         }
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         try:
             path = resolve_workspace_path(
                 context.workspace_path,

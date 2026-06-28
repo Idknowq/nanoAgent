@@ -36,7 +36,7 @@ class ActivateSkillTool(RuntimeTool):
         self.session = session  # 保存当前 run 的 Skill 激活状态。
         self.activation_store = activation_store  # 可选的激活审计存储。
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         name = input_data["name"]
         try:
             loaded, newly_activated = self.session.activate(name)

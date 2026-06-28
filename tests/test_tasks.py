@@ -30,7 +30,7 @@ def make_context(tmp_path: Path) -> ToolContext:
     )
 
 
-def test_task_ids_survive_service_recreation(tmp_path: Path) -> None:
+async def test_task_ids_survive_service_recreation(tmp_path: Path) -> None:
     first_service = make_service(tmp_path)
     first = first_service.create(subject="First", description="First task")
     second_service = make_service(tmp_path)
@@ -41,7 +41,7 @@ def test_task_ids_survive_service_recreation(tmp_path: Path) -> None:
     assert second.task_id == "task-2"
 
 
-def test_task_with_incomplete_dependency_is_blocked_then_unlocked(tmp_path: Path) -> None:
+async def test_task_with_incomplete_dependency_is_blocked_then_unlocked(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     upstream = service.create(subject="Upstream", description="Prepare input")
     downstream = service.create(
@@ -61,7 +61,7 @@ def test_task_with_incomplete_dependency_is_blocked_then_unlocked(tmp_path: Path
     assert unlocked.blocked_reason is None
 
 
-def test_external_block_is_not_unlocked_by_dependency_completion(tmp_path: Path) -> None:
+async def test_external_block_is_not_unlocked_by_dependency_completion(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     upstream = service.create(subject="Upstream", description="Prepare input")
     downstream = service.create(
@@ -79,7 +79,7 @@ def test_external_block_is_not_unlocked_by_dependency_completion(tmp_path: Path)
     assert still_blocked.blocked_reason == TaskBlockedReason.EXTERNAL
 
 
-def test_missing_self_and_cyclic_dependencies_are_rejected(tmp_path: Path) -> None:
+async def test_missing_self_and_cyclic_dependencies_are_rejected(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     first = service.create(subject="First", description="First task")
     second = service.create(
@@ -109,7 +109,7 @@ def test_missing_self_and_cyclic_dependencies_are_rejected(tmp_path: Path) -> No
     assert duplicate.value.code == "invalid_dependency"
 
 
-def test_incomplete_dependency_prevents_start(tmp_path: Path) -> None:
+async def test_incomplete_dependency_prevents_start(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     upstream = service.create(subject="Upstream", description="Prepare input")
     downstream = service.create(
@@ -124,7 +124,7 @@ def test_incomplete_dependency_prevents_start(tmp_path: Path) -> None:
     assert error.value.code == "dependency_incomplete"
 
 
-def test_in_progress_task_cannot_add_incomplete_dependency(tmp_path: Path) -> None:
+async def test_in_progress_task_cannot_add_incomplete_dependency(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     dependency = service.create(subject="Dependency", description="Prepare input")
     task = service.create(subject="Task", description="Run work")
@@ -136,7 +136,7 @@ def test_in_progress_task_cannot_add_incomplete_dependency(tmp_path: Path) -> No
     assert error.value.code == "dependency_incomplete"
 
 
-def test_failed_task_can_retry_but_terminal_task_cannot_reopen(tmp_path: Path) -> None:
+async def test_failed_task_can_retry_but_terminal_task_cannot_reopen(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     task = service.create(subject="Task", description="Run work")
     service.update(task.task_id, status=TaskStatus.IN_PROGRESS)
@@ -152,7 +152,7 @@ def test_failed_task_can_retry_but_terminal_task_cannot_reopen(tmp_path: Path) -
     assert error.value.code == "invalid_task_transition"
 
 
-def test_task_snapshots_and_events_are_persisted(tmp_path: Path) -> None:
+async def test_task_snapshots_and_events_are_persisted(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     task = service.create(subject="Persist", description="Persist task")
     service.update(task.task_id, status=TaskStatus.IN_PROGRESS, owner="main")
@@ -169,7 +169,7 @@ def test_task_snapshots_and_events_are_persisted(tmp_path: Path) -> None:
     assert [event["event_type"] for event in events] == ["created", "updated"]
 
 
-def test_task_tools_create_get_list_and_update(tmp_path: Path) -> None:
+async def test_task_tools_create_get_list_and_update(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     context = make_context(tmp_path)
     create_tool = TaskCreateTool(service)
@@ -177,16 +177,16 @@ def test_task_tools_create_get_list_and_update(tmp_path: Path) -> None:
     list_tool = TaskListTool(service)
     update_tool = TaskUpdateTool(service)
 
-    created = create_tool.invoke(
+    created = await create_tool.invoke(
         {"subject": "Inspect", "description": "Inspect repository"},
         context,
     )
-    loaded = get_tool.invoke({"task_id": "task-1"}, context)
-    updated = update_tool.invoke(
+    loaded = await get_tool.invoke({"task_id": "task-1"}, context)
+    updated = await update_tool.invoke(
         {"task_id": "task-1", "status": "in_progress", "owner": "main"},
         context,
     )
-    listed = list_tool.invoke({"status": "in_progress"}, context)
+    listed = await list_tool.invoke({"status": "in_progress"}, context)
 
     assert created.success
     assert loaded.data["task"]["task_id"] == "task-1"
@@ -194,12 +194,12 @@ def test_task_tools_create_get_list_and_update(tmp_path: Path) -> None:
     assert [task["task_id"] for task in listed.data["tasks"]] == ["task-1"]
 
 
-def test_task_tools_return_stable_errors(tmp_path: Path) -> None:
+async def test_task_tools_return_stable_errors(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     context = make_context(tmp_path)
 
-    missing = TaskGetTool(service).invoke({"task_id": "task-9"}, context)
-    invalid_dependency = TaskCreateTool(service).invoke(
+    missing = await TaskGetTool(service).invoke({"task_id": "task-9"}, context)
+    invalid_dependency = await TaskCreateTool(service).invoke(
         {
             "subject": "Blocked",
             "description": "Needs missing task",
@@ -212,7 +212,7 @@ def test_task_tools_return_stable_errors(tmp_path: Path) -> None:
     assert invalid_dependency.error_code == "invalid_dependency"
 
 
-def test_task_tools_are_not_part_of_subagent_default_registry(tmp_path: Path) -> None:
+async def test_task_tools_are_not_part_of_subagent_default_registry(tmp_path: Path) -> None:
     context = make_context(tmp_path)
 
     names = build_default_tool_registry(context).names()

@@ -30,7 +30,7 @@ def read_records(path: Path) -> list[dict]:
     ]
 
 
-def test_audit_hook_writes_successful_tool_call(tmp_path: Path) -> None:
+async def test_audit_hook_writes_successful_tool_call(tmp_path: Path) -> None:
     context = make_context(tmp_path)
     hook = AuditHook()
     tool = TodoWriteTool()
@@ -39,9 +39,9 @@ def test_audit_hook_writes_successful_tool_call(tmp_path: Path) -> None:
         name=tool.name,
         input={"action": "add", "title": "检查 README"},
     )
-    result = tool.invoke(tool_use.input, context)
+    result = await tool.invoke(tool_use.input, context)
 
-    hook.after_tool_call(context, tool, tool_use, result, 0.125)
+    await hook.after_tool_call(context, tool, tool_use, result, 0.125)
 
     records = read_records(context.run_dir / "audit.jsonl")
     assert len(records) == 1
@@ -56,15 +56,15 @@ def test_audit_hook_writes_successful_tool_call(tmp_path: Path) -> None:
     assert records[0]["duration_seconds"] == 0.125
 
 
-def test_audit_hook_appends_failure_record(tmp_path: Path) -> None:
+async def test_audit_hook_appends_failure_record(tmp_path: Path) -> None:
     context = make_context(tmp_path)
     hook = AuditHook()
     tool = TodoWriteTool()
     tool_use = ToolUseRequest(id="call-1", name=tool.name, input={"action": "complete"})
     failure = ToolResult.failure(code="invalid_input", message="todo id is required")
 
-    hook.after_tool_call(context, tool, tool_use, failure, 0.01)
-    hook.after_tool_call(context, tool, tool_use, failure, 0.02)
+    await hook.after_tool_call(context, tool, tool_use, failure, 0.01)
+    await hook.after_tool_call(context, tool, tool_use, failure, 0.02)
 
     records = read_records(context.run_dir / "audit.jsonl")
     assert len(records) == 2
@@ -74,7 +74,7 @@ def test_audit_hook_appends_failure_record(tmp_path: Path) -> None:
     assert records[1]["duration_seconds"] == 0.02
 
 
-def test_audit_hook_truncates_large_input_summary(tmp_path: Path) -> None:
+async def test_audit_hook_truncates_large_input_summary(tmp_path: Path) -> None:
     context = make_context(tmp_path)
     hook = AuditHook(max_input_chars=100)
     tool = TodoWriteTool()
@@ -84,7 +84,7 @@ def test_audit_hook_truncates_large_input_summary(tmp_path: Path) -> None:
         input={"action": "add", "title": "x" * 200},
     )
 
-    hook.after_tool_call(
+    await hook.after_tool_call(
         context,
         tool,
         tool_use,
@@ -97,7 +97,7 @@ def test_audit_hook_truncates_large_input_summary(tmp_path: Path) -> None:
     assert summary.endswith("...[truncated]")
 
 
-def test_audit_hook_uses_tool_specific_input_redaction(tmp_path: Path) -> None:
+async def test_audit_hook_uses_tool_specific_input_redaction(tmp_path: Path) -> None:
     context = make_context(tmp_path)
     hook = AuditHook()
     tool = EditFileTool()
@@ -114,7 +114,7 @@ def test_audit_hook_uses_tool_specific_input_redaction(tmp_path: Path) -> None:
         },
     )
 
-    hook.after_tool_call(
+    await hook.after_tool_call(
         context,
         tool,
         tool_use,
@@ -134,7 +134,7 @@ def test_audit_hook_uses_tool_specific_input_redaction(tmp_path: Path) -> None:
     }
 
 
-def test_audit_hook_write_failure_does_not_raise(tmp_path: Path) -> None:
+async def test_audit_hook_write_failure_does_not_raise(tmp_path: Path) -> None:
     blocked_run_dir = tmp_path / "blocked"
     blocked_run_dir.write_text("not a directory", encoding="utf-8")
     context = make_context(tmp_path, run_dir=blocked_run_dir)
@@ -142,7 +142,7 @@ def test_audit_hook_write_failure_does_not_raise(tmp_path: Path) -> None:
     tool = TodoWriteTool()
     tool_use = ToolUseRequest(id="call-1", name=tool.name, input={"action": "add"})
 
-    hook.after_tool_call(
+    await hook.after_tool_call(
         context,
         tool,
         tool_use,
@@ -156,7 +156,7 @@ def test_audit_hook_write_failure_does_not_raise(tmp_path: Path) -> None:
     assert "external mutation" not in hook.write_errors
 
 
-def test_audit_hook_rejects_invalid_input_limit() -> None:
+async def test_audit_hook_rejects_invalid_input_limit() -> None:
     with pytest.raises(ValueError, match="at least 100"):
         AuditHook(max_input_chars=99)
 
@@ -165,7 +165,7 @@ class OneTodoLLM:
     def __init__(self) -> None:
         self.calls = 0
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         if self.calls == 1:
             return LLMResponse(
@@ -181,7 +181,7 @@ class OneTodoLLM:
         return LLMResponse(content="done", stop_reason="end_turn")
 
 
-def test_agent_loop_writes_audit_file_for_actual_tool_calls(tmp_path: Path) -> None:
+async def test_agent_loop_writes_audit_file_for_actual_tool_calls(tmp_path: Path) -> None:
     config = AgentConfig(workspace_root=tmp_path, runs_root=tmp_path / "runs")
     context = make_context(tmp_path)
     loop = AgentLoop(
@@ -192,7 +192,7 @@ def test_agent_loop_writes_audit_file_for_actual_tool_calls(tmp_path: Path) -> N
         hooks=[AuditHook()],
     )
 
-    result = loop.run(
+    result = await loop.run(
         RunSummary(run_id=context.run_id, repo_url=context.repo_url),
         [AgentMessage(role="user", content="start")],
     )

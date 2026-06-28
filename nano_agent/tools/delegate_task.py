@@ -60,7 +60,7 @@ class DelegateTaskTool(RuntimeTool):
         self.manager = manager  # 执行子 Agent 创建、运行和结果收集。
         self.supervisor = supervisor  # 可选的后台 Job 调度器。
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         if context.delegation_depth > 0 or context.subagent_id is not None:
             return ToolResult.failure(
                 code="recursive_delegation_denied",
@@ -115,7 +115,7 @@ class DelegateTaskTool(RuntimeTool):
                     code="task_id_requires_background",
                     message="task_id can only be used with run_in_background=true",
                 )
-            result = self.manager.run(request)
+            result = await self.manager.run(request)
         except ValueError as exc:
             return ToolResult.failure(code="invalid_subagent_request", message=str(exc))
         return ToolResult(
@@ -145,7 +145,7 @@ class DelegatedTaskGetTool(RuntimeTool):
     def __init__(self, supervisor: BackgroundJobSupervisor) -> None:
         self.supervisor = supervisor  # 查询当前主运行的后台 Job。
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         job = self.supervisor.get(input_data["job_id"], observe=True)
         return ToolResult(
             success=True,
@@ -172,7 +172,7 @@ class DelegatedTaskListTool(RuntimeTool):
     def __init__(self, supervisor: BackgroundJobSupervisor) -> None:
         self.supervisor = supervisor  # 枚举当前主运行的后台 Job。
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         jobs = self.supervisor.list(input_data["status"], observe=True)
         status_counts = Counter(job.status for job in jobs)
         status_summary = ", ".join(
@@ -211,7 +211,7 @@ class DelegatedTaskCancelTool(RuntimeTool):
     def __init__(self, supervisor: BackgroundJobSupervisor) -> None:
         self.supervisor = supervisor  # 取消当前主运行的指定后台 Job。
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         job = self.supervisor.cancel(input_data["job_id"])
         job = self.supervisor.get(job.job_id, observe=True)
         return ToolResult(

@@ -70,7 +70,11 @@ class OpenAICompatibleLLMClient:
             thinking_enabled=thinking_enabled,
         )
 
-    def complete(self, messages: list[AgentMessage], tools: list[ToolSpec]) -> LLMResponse:
+    async def complete(
+        self,
+        messages: list[AgentMessage],
+        tools: list[ToolSpec],
+    ) -> LLMResponse:
         request: dict[str, Any] = {
             "model": self.model,
             "messages": self._to_openai_messages(messages),

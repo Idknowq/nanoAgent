@@ -122,7 +122,7 @@ class TodoWriteTool(RuntimeTool):
     def __init__(self) -> None:
         self.todos = TodoList()  # 保存 todo_write 工具的内部短期状态。
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         action = str(input_data.get("action", "add"))
         title = str(input_data.get("title", "")).strip()
         item_id = input_data.get("id")

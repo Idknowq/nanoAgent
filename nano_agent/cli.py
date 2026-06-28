@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -73,7 +74,7 @@ def run(
         llm_model=model,
     )
     agent = NanoAgent(config=config)
-    result = agent.run(repo_url=repo_url, user_request=user_request)
+    result = asyncio.run(agent.run(repo_url=repo_url, user_request=user_request))
 
     successful_tools = sum(call.success for call in result.tool_calls)
     failed_tools = len(result.tool_calls) - successful_tools

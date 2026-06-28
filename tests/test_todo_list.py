@@ -5,7 +5,7 @@ from nano_agent.tools.base import ToolContext
 from nano_agent.tools.todo import TodoList, TodoStatus, TodoWriteTool
 
 
-def test_todo_list_tracks_session_tasks() -> None:
+async def test_todo_list_tracks_session_tasks() -> None:
     todos = TodoList()
 
     item = todos.add("Read repository files")
@@ -16,7 +16,7 @@ def test_todo_list_tracks_session_tasks() -> None:
     assert todos.items[0].evidence == "README.md collected"
 
 
-def test_todo_list_rejects_unknown_item() -> None:
+async def test_todo_list_rejects_unknown_item() -> None:
     todos = TodoList()
 
     with pytest.raises(KeyError):
@@ -41,16 +41,16 @@ def make_context(tmp_path):  # type: ignore[no-untyped-def]
         ({"action": "unknown"}, "Input should be"),
     ],
 )
-def test_todo_write_returns_invalid_input(tmp_path, input_data, message) -> None:  # type: ignore[no-untyped-def]
-    result = TodoWriteTool().invoke(input_data, make_context(tmp_path))
+async def test_todo_write_returns_invalid_input(tmp_path, input_data, message) -> None:  # type: ignore[no-untyped-def]
+    result = await TodoWriteTool().invoke(input_data, make_context(tmp_path))
 
     assert not result.success
     assert result.error_code == "invalid_input"
     assert message in result.error_message
 
 
-def test_todo_write_returns_invalid_input_for_unknown_item(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    result = TodoWriteTool().invoke(
+async def test_todo_write_returns_invalid_input_for_unknown_item(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    result = await TodoWriteTool().invoke(
         {"action": "complete", "id": "missing"},
         make_context(tmp_path),
     )

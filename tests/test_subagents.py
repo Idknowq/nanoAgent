@@ -1,4 +1,5 @@
 import json
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
@@ -28,7 +29,7 @@ class SuccessfulSubagentLLM:
         self.requests = []
         self.tool_names: list[set[str]] = []
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.requests.append([message.model_copy(deep=True) for message in messages])
         self.tool_names.append({tool.name for tool in tools})
         return LLMResponse(
@@ -50,7 +51,7 @@ class SuccessfulSubagentLLM:
 
 
 class InvalidEndTurnSubagentLLM:
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         return LLMResponse(content="done", stop_reason="end_turn")
 
 
@@ -60,7 +61,7 @@ class ExploreThenFinalizeSubagentLLM:
         self.final_tools: set[str] = set()  # 最后一步向模型暴露的工具名称。
         self.saw_final_prompt = False  # 最后一步是否收到强制总结提示。
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         if self.calls == 1:
             return LLMResponse(
@@ -101,7 +102,7 @@ class RejectFinalizationThenCorrectSubagentLLM:
         self.final_tool_sets: list[set[str]] = []  # 保存最终阶段暴露的工具集合。
         self.saw_correction_prompt = False  # 是否收到最终协议纠正提示。
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         if self.calls == 1:
             return LLMResponse(
@@ -151,7 +152,7 @@ class RejectBothFinalizationCallsSubagentLLM:
     def __init__(self) -> None:
         self.calls = 0  # 记录最终协议持续失败前的调用次数。
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         return LLMResponse(
             stop_reason="tool_use",
@@ -166,7 +167,7 @@ class RejectBothFinalizationCallsSubagentLLM:
 
 
 class BlockedSubagentLLM:
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         return LLMResponse(
             stop_reason="tool_use",
             tool_uses=[
@@ -190,7 +191,7 @@ class BlockingSubagentLLM:
         self.entered = Event()  # 标记子 Agent 已进入一次物理 LLM 调用。
         self.release = Event()  # 允许测试在发出取消请求后释放 LLM 调用。
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.entered.set()
         self.release.wait(timeout=2)
         return LLMResponse(content="late response", stop_reason="end_turn")
@@ -233,7 +234,7 @@ def make_manager(
     return manager, context
 
 
-def test_subagent_state_rejects_invalid_terminal_transition() -> None:
+async def test_subagent_state_rejects_invalid_terminal_transition() -> None:
     state = SubagentState(
         subagent_id="subagent-1",
         parent_run_id="parent",
@@ -249,7 +250,7 @@ def test_subagent_state_rejects_invalid_terminal_transition() -> None:
         state.transition(SubagentStatus.RUNNING)
 
 
-def test_subagent_has_isolated_messages_tools_and_counters(tmp_path: Path) -> None:
+async def test_subagent_has_isolated_messages_tools_and_counters(tmp_path: Path) -> None:
     llm = SuccessfulSubagentLLM()
     manager, parent_context = make_manager(tmp_path, llm)
     request = SubagentRequest(
@@ -260,7 +261,7 @@ def test_subagent_has_isolated_messages_tools_and_counters(tmp_path: Path) -> No
         max_llm_calls=3,
     )
 
-    result = manager.run(request)
+    result = await manager.run(request)
 
     assert result.status == SubagentStatus.SUCCEEDED
     assert result.output == "Found the requested implementation detail."
@@ -277,7 +278,7 @@ def test_subagent_has_isolated_messages_tools_and_counters(tmp_path: Path) -> No
     assert parent_context.current_llm_call_id == "llm-7"
 
 
-def test_subagent_prepare_and_execute_share_one_lifecycle(tmp_path: Path) -> None:
+async def test_subagent_prepare_and_execute_share_one_lifecycle(tmp_path: Path) -> None:
     manager, _ = make_manager(tmp_path, SuccessfulSubagentLLM())
     prepared = manager.prepare(
         SubagentRequest(
@@ -293,16 +294,16 @@ def test_subagent_prepare_and_execute_share_one_lifecycle(tmp_path: Path) -> Non
         (Path(prepared.run_dir) / "subagent.json").read_text(encoding="utf-8")
     )["status"] == "created"
 
-    result = manager.execute(prepared)
+    result = await manager.execute(prepared)
 
     assert result.status == SubagentStatus.SUCCEEDED
     assert prepared.state.status == SubagentStatus.SUCCEEDED
 
 
-def test_subagent_persists_lifecycle_and_result(tmp_path: Path) -> None:
+async def test_subagent_persists_lifecycle_and_result(tmp_path: Path) -> None:
     manager, _ = make_manager(tmp_path, SuccessfulSubagentLLM())
 
-    result = manager.run(
+    result = await manager.run(
         SubagentRequest(
             task="Inspect files.",
             allowed_tools=("list_files",),
@@ -330,9 +331,9 @@ def test_subagent_persists_lifecycle_and_result(tmp_path: Path) -> None:
     assert summary["llm_call_count"] == 1
 
 
-def test_subagent_id_survives_manager_recreation(tmp_path: Path) -> None:
+async def test_subagent_id_survives_manager_recreation(tmp_path: Path) -> None:
     first_manager, _ = make_manager(tmp_path, SuccessfulSubagentLLM())
-    first = first_manager.run(
+    first = await first_manager.run(
         SubagentRequest(
             task="First inspection.",
             max_steps=3,
@@ -341,7 +342,7 @@ def test_subagent_id_survives_manager_recreation(tmp_path: Path) -> None:
     )
     second_manager, _ = make_manager(tmp_path, SuccessfulSubagentLLM())
 
-    second = second_manager.run(
+    second = await second_manager.run(
         SubagentRequest(
             task="Second inspection.",
             max_steps=3,
@@ -355,10 +356,10 @@ def test_subagent_id_survives_manager_recreation(tmp_path: Path) -> None:
     assert Path(second.run_dir).is_dir()
 
 
-def test_blocked_subagent_preserves_blocked_status(tmp_path: Path) -> None:
+async def test_blocked_subagent_preserves_blocked_status(tmp_path: Path) -> None:
     manager, _ = make_manager(tmp_path, BlockedSubagentLLM())
 
-    result = manager.run(
+    result = await manager.run(
         SubagentRequest(
             task="Inspect protected service.",
             max_steps=3,
@@ -374,11 +375,11 @@ def test_blocked_subagent_preserves_blocked_status(tmp_path: Path) -> None:
     assert state["status"] == "blocked"
 
 
-def test_subagent_tools_must_be_available_to_parent(tmp_path: Path) -> None:
+async def test_subagent_tools_must_be_available_to_parent(tmp_path: Path) -> None:
     manager, _ = make_manager(tmp_path, SuccessfulSubagentLLM())
 
     with pytest.raises(ValueError, match="edit_file"):
-        manager.run(
+        await manager.run(
             SubagentRequest(
                 task="Edit a file.",
                 allowed_tools=("edit_file",),
@@ -388,7 +389,7 @@ def test_subagent_tools_must_be_available_to_parent(tmp_path: Path) -> None:
         )
 
 
-def test_subagent_manager_enforces_configured_budgets(tmp_path: Path) -> None:
+async def test_subagent_manager_enforces_configured_budgets(tmp_path: Path) -> None:
     config = AgentConfig(
         workspace_root=tmp_path,
         runs_root=tmp_path / "runs",
@@ -400,7 +401,7 @@ def test_subagent_manager_enforces_configured_budgets(tmp_path: Path) -> None:
     manager, _ = make_manager(tmp_path, SuccessfulSubagentLLM(), config=config)
 
     with pytest.raises(ValueError, match="max_steps"):
-        manager.run(
+        await manager.run(
             SubagentRequest(
                 task="Inspect files.",
                 max_steps=3,
@@ -409,7 +410,7 @@ def test_subagent_manager_enforces_configured_budgets(tmp_path: Path) -> None:
         )
 
 
-def test_background_subagent_rejects_non_read_only_tool(tmp_path: Path) -> None:
+async def test_background_subagent_rejects_non_read_only_tool(tmp_path: Path) -> None:
     config = AgentConfig(
         workspace_root=tmp_path,
         runs_root=tmp_path / "runs",
@@ -436,7 +437,7 @@ def test_background_subagent_rejects_non_read_only_tool(tmp_path: Path) -> None:
         manager.validate_background_request(request)
 
 
-def test_running_subagent_stops_after_cancellation_boundary(tmp_path: Path) -> None:
+async def test_running_subagent_stops_after_cancellation_boundary(tmp_path: Path) -> None:
     llm = BlockingSubagentLLM()
     manager, _ = make_manager(tmp_path, llm)
     prepared = manager.prepare(
@@ -450,7 +451,7 @@ def test_running_subagent_stops_after_cancellation_boundary(tmp_path: Path) -> N
     token = CancellationToken()
 
     with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(manager.execute, prepared, token)
+        future = executor.submit(lambda: asyncio.run(manager.execute(prepared, token)))
         assert llm.entered.wait(timeout=1)
         token.cancel()
         llm.release.set()
@@ -461,10 +462,10 @@ def test_running_subagent_stops_after_cancellation_boundary(tmp_path: Path) -> N
     assert prepared.state.status == SubagentStatus.CANCELLED
 
 
-def test_subagent_llm_call_limit_returns_structured_failure(tmp_path: Path) -> None:
+async def test_subagent_llm_call_limit_returns_structured_failure(tmp_path: Path) -> None:
     manager, _ = make_manager(tmp_path, InvalidEndTurnSubagentLLM())
 
-    result = manager.run(
+    result = await manager.run(
         SubagentRequest(
             task="Inspect files.",
             max_steps=5,
@@ -478,10 +479,10 @@ def test_subagent_llm_call_limit_returns_structured_failure(tmp_path: Path) -> N
     assert "max_llm_calls=1" in (result.error or "")
 
 
-def test_subagent_step_limit_returns_structured_failure(tmp_path: Path) -> None:
+async def test_subagent_step_limit_returns_structured_failure(tmp_path: Path) -> None:
     manager, _ = make_manager(tmp_path, InvalidEndTurnSubagentLLM())
 
-    result = manager.run(
+    result = await manager.run(
         SubagentRequest(
             task="Inspect files.",
             max_steps=1,
@@ -494,12 +495,12 @@ def test_subagent_step_limit_returns_structured_failure(tmp_path: Path) -> None:
     assert result.steps_used == 1
 
 
-def test_subagent_reserves_last_step_for_finish_run(tmp_path: Path) -> None:
+async def test_subagent_reserves_last_step_for_finish_run(tmp_path: Path) -> None:
     (tmp_path / "evidence.txt").write_text("evidence", encoding="utf-8")
     llm = ExploreThenFinalizeSubagentLLM()
     manager, _ = make_manager(tmp_path, llm)
 
-    result = manager.run(
+    result = await manager.run(
         SubagentRequest(
             task="Inspect evidence and summarize.",
             allowed_tools=("read_file",),
@@ -515,12 +516,12 @@ def test_subagent_reserves_last_step_for_finish_run(tmp_path: Path) -> None:
     assert llm.saw_final_prompt
 
 
-def test_subagent_corrects_invalid_finalization_once(tmp_path: Path) -> None:
+async def test_subagent_corrects_invalid_finalization_once(tmp_path: Path) -> None:
     (tmp_path / "evidence.txt").write_text("evidence", encoding="utf-8")
     llm = RejectFinalizationThenCorrectSubagentLLM()
     manager, _ = make_manager(tmp_path, llm)
 
-    result = manager.run(
+    result = await manager.run(
         SubagentRequest(
             task="Inspect evidence and summarize.",
             allowed_tools=("read_file",),
@@ -537,12 +538,12 @@ def test_subagent_corrects_invalid_finalization_once(tmp_path: Path) -> None:
     assert llm.saw_correction_prompt
 
 
-def test_subagent_fails_after_invalid_finalization_correction(tmp_path: Path) -> None:
+async def test_subagent_fails_after_invalid_finalization_correction(tmp_path: Path) -> None:
     (tmp_path / "evidence.txt").write_text("evidence", encoding="utf-8")
     llm = RejectBothFinalizationCallsSubagentLLM()
     manager, _ = make_manager(tmp_path, llm)
 
-    result = manager.run(
+    result = await manager.run(
         SubagentRequest(
             task="Inspect evidence and summarize.",
             allowed_tools=("read_file",),
@@ -558,25 +559,25 @@ def test_subagent_fails_after_invalid_finalization_correction(tmp_path: Path) ->
     assert "one protocol-correction call" in (result.error or "")
 
 
-def test_delegate_task_rejects_recursive_delegation(tmp_path: Path) -> None:
+async def test_delegate_task_rejects_recursive_delegation(tmp_path: Path) -> None:
     manager, context = make_manager(tmp_path, SuccessfulSubagentLLM())
     context.subagent_id = "subagent-existing"
     context.delegation_depth = 1
     tool = DelegateTaskTool(manager)
 
-    result = tool.invoke({"task": "Create another subagent."}, context)
+    result = await tool.invoke({"task": "Create another subagent."}, context)
 
     assert not result.success
     assert result.error_code == "recursive_delegation_denied"
 
 
-def test_manager_rejects_recursive_delegation_without_tool_boundary(tmp_path: Path) -> None:
+async def test_manager_rejects_recursive_delegation_without_tool_boundary(tmp_path: Path) -> None:
     manager, context = make_manager(tmp_path, SuccessfulSubagentLLM())
     context.subagent_id = "subagent-existing"
     context.delegation_depth = 1
 
     with pytest.raises(ValueError, match="cannot create"):
-        manager.run(
+        await manager.run(
             SubagentRequest(
                 task="Create another subagent.",
                 max_steps=3,
@@ -585,11 +586,11 @@ def test_manager_rejects_recursive_delegation_without_tool_boundary(tmp_path: Pa
         )
 
 
-def test_delegate_task_returns_structured_subagent_result(tmp_path: Path) -> None:
+async def test_delegate_task_returns_structured_subagent_result(tmp_path: Path) -> None:
     manager, context = make_manager(tmp_path, SuccessfulSubagentLLM())
     tool = DelegateTaskTool(manager)
 
-    result = tool.invoke(
+    result = await tool.invoke(
         {
             "task": "Inspect files.",
             "allowed_tools": ["list_files"],

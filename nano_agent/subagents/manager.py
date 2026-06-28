@@ -68,8 +68,8 @@ class SubagentManager:
         self.summary_store = summary_store or SummaryStore()  # 持久化子运行执行摘要。
         self.llm_factory = llm_factory or (lambda: self.llm)  # 为每个子运行提供 LLM 客户端。
 
-    def run(self, request: SubagentRequest) -> SubagentResult:
-        return self.execute(self.prepare(request))
+    async def run(self, request: SubagentRequest) -> SubagentResult:
+        return await self.execute(self.prepare(request))
 
     def prepare(self, request: SubagentRequest) -> PreparedSubagent:
         self._validate_request(request)
@@ -115,7 +115,7 @@ class SubagentManager:
                 + ", ".join(sorted(denied))
             )
 
-    def execute(
+    async def execute(
         self,
         prepared: PreparedSubagent,
         cancellation_token: CancellationToken | None = None,
@@ -134,7 +134,7 @@ class SubagentManager:
         self.store.save(run_dir, state)
 
         try:
-            result = self._execute(
+            result = await self._execute(
                 prepared.request,
                 run,
                 run_dir,
@@ -237,7 +237,7 @@ class SubagentManager:
                 f"{self.config.subagent_max_llm_calls}"
             )
 
-    def _execute(
+    async def _execute(
         self,
         request: SubagentRequest,
         run: RunSummary,
@@ -284,7 +284,7 @@ class SubagentManager:
             reserve_final_step=True,
             cancellation_token=cancellation_token,
         )
-        completed = loop.run(run, self.context_builder.build(request))
+        completed = await loop.run(run, self.context_builder.build(request))
         return self._result_from_run(completed, context.subagent_id or "unknown", run_dir)
 
     def _validate_tools(self, requested: tuple[str, ...]) -> set[str]:

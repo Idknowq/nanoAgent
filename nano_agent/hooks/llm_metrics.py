@@ -57,7 +57,7 @@ class LLMMetricsHook(NoOpHook):
     def write_errors(self) -> list[str]:
         return list(self._write_errors)
 
-    def before_llm_call(
+    async def before_llm_call(
         self,
         context: ToolContext,
         messages: list[AgentMessage],
@@ -68,7 +68,7 @@ class LLMMetricsHook(NoOpHook):
         self._available_tool_count = len(tools)
         return None
 
-    def after_llm_call(
+    async def after_llm_call(
         self,
         context: ToolContext,
         response: LLMResponse,
@@ -111,7 +111,7 @@ class LLMMetricsHook(NoOpHook):
         self._pending_call_id = None
         return None
 
-    def on_error(self, context: ToolContext, error: Exception) -> HookResult | None:
+    async def on_error(self, context: ToolContext, error: Exception) -> HookResult | None:
         if self._pending_call_id is None:
             return None
         if context.current_llm_started_at is None:

@@ -71,7 +71,7 @@ class ControlledSubagentManager:
             state=state,
         )
 
-    def execute(
+    async def execute(
         self,
         prepared: PreparedSubagent,
         cancellation_token: CancellationToken | None = None,
@@ -165,7 +165,7 @@ def wait_terminal(
     raise AssertionError(f"job did not finish: {job_id}")
 
 
-def test_supervisor_runs_jobs_concurrently_with_worker_limit(tmp_path: Path) -> None:
+async def test_supervisor_runs_jobs_concurrently_with_worker_limit(tmp_path: Path) -> None:
     manager = ControlledSubagentManager()
     supervisor = make_supervisor(tmp_path, manager, max_workers=2)
     first = supervisor.submit(make_request("first"))
@@ -183,7 +183,7 @@ def test_supervisor_runs_jobs_concurrently_with_worker_limit(tmp_path: Path) -> 
     supervisor.shutdown()
 
 
-def test_supervisor_keeps_excess_job_queued(tmp_path: Path) -> None:
+async def test_supervisor_keeps_excess_job_queued(tmp_path: Path) -> None:
     manager = ControlledSubagentManager()
     supervisor = make_supervisor(tmp_path, manager, max_workers=1)
     first = supervisor.submit(make_request("first"))
@@ -204,7 +204,7 @@ def test_supervisor_keeps_excess_job_queued(tmp_path: Path) -> None:
     supervisor.shutdown()
 
 
-def test_concurrent_submissions_receive_unique_job_ids(tmp_path: Path) -> None:
+async def test_concurrent_submissions_receive_unique_job_ids(tmp_path: Path) -> None:
     manager = ControlledSubagentManager()
     manager.release.set()
     supervisor = make_supervisor(tmp_path, manager, max_workers=4, max_jobs=20)
@@ -219,7 +219,7 @@ def test_concurrent_submissions_receive_unique_job_ids(tmp_path: Path) -> None:
     supervisor.shutdown()
 
 
-def test_queued_and_running_jobs_can_be_cancelled(tmp_path: Path) -> None:
+async def test_queued_and_running_jobs_can_be_cancelled(tmp_path: Path) -> None:
     manager = ControlledSubagentManager()
     supervisor = make_supervisor(tmp_path, manager, max_workers=1)
     running = supervisor.submit(make_request("running"))
@@ -236,7 +236,7 @@ def test_queued_and_running_jobs_can_be_cancelled(tmp_path: Path) -> None:
     supervisor.shutdown()
 
 
-def test_job_completion_updates_linked_task(tmp_path: Path) -> None:
+async def test_job_completion_updates_linked_task(tmp_path: Path) -> None:
     task_service = TaskService(TaskStore(tmp_path / "run"))
     task = task_service.create(subject="Inspect", description="Inspect files")
     manager = ControlledSubagentManager()
@@ -253,7 +253,7 @@ def test_job_completion_updates_linked_task(tmp_path: Path) -> None:
     supervisor.shutdown()
 
 
-def test_cancelled_execution_returns_linked_task_to_pending(tmp_path: Path) -> None:
+async def test_cancelled_execution_returns_linked_task_to_pending(tmp_path: Path) -> None:
     task_service = TaskService(TaskStore(tmp_path / "run"))
     task = task_service.create(subject="Inspect", description="Inspect files")
     manager = ControlledSubagentManager()
@@ -267,7 +267,7 @@ def test_cancelled_execution_returns_linked_task_to_pending(tmp_path: Path) -> N
     supervisor.shutdown()
 
 
-def test_completion_hook_delivers_terminal_event_once(tmp_path: Path) -> None:
+async def test_completion_hook_delivers_terminal_event_once(tmp_path: Path) -> None:
     manager = ControlledSubagentManager()
     manager.release.set()
     supervisor = make_supervisor(tmp_path, manager)
@@ -275,8 +275,8 @@ def test_completion_hook_delivers_terminal_event_once(tmp_path: Path) -> None:
     wait_terminal(supervisor, job.job_id)
     hook = BackgroundCompletionHook(supervisor)
 
-    first = hook.before_llm_call(None, [], [])  # type: ignore[arg-type]
-    second = hook.before_llm_call(None, [], [])  # type: ignore[arg-type]
+    first = await hook.before_llm_call(None, [], [])  # type: ignore[arg-type]
+    second = await hook.before_llm_call(None, [], [])  # type: ignore[arg-type]
 
     assert first is not None
     assert job.job_id in first.injected_messages[0].content
@@ -287,7 +287,7 @@ def test_completion_hook_delivers_terminal_event_once(tmp_path: Path) -> None:
     supervisor.shutdown()
 
 
-def test_supervisor_idle_wait_unblocks_when_any_job_completes(tmp_path: Path) -> None:
+async def test_supervisor_idle_wait_unblocks_when_any_job_completes(tmp_path: Path) -> None:
     manager = ControlledSubagentManager()
     supervisor = make_supervisor(tmp_path, manager)
     supervisor.submit(make_request("inspect"))
@@ -301,7 +301,7 @@ def test_supervisor_idle_wait_unblocks_when_any_job_completes(tmp_path: Path) ->
     supervisor.shutdown()
 
 
-def test_querying_terminal_job_suppresses_duplicate_completion_notice(
+async def test_querying_terminal_job_suppresses_duplicate_completion_notice(
     tmp_path: Path,
 ) -> None:
     manager = ControlledSubagentManager()
@@ -311,13 +311,13 @@ def test_querying_terminal_job_suppresses_duplicate_completion_notice(
     wait_terminal(supervisor, job.job_id)
     supervisor.get(job.job_id, observe=True)
 
-    result = BackgroundCompletionHook(supervisor).before_llm_call(None, [], [])  # type: ignore[arg-type]
+    result = await BackgroundCompletionHook(supervisor).before_llm_call(None, [], [])  # type: ignore[arg-type]
 
     assert result is None
     supervisor.shutdown()
 
 
-def test_finish_run_rejects_active_background_jobs(tmp_path: Path) -> None:
+async def test_finish_run_rejects_active_background_jobs(tmp_path: Path) -> None:
     context = ToolContext(
         run_id="run",
         repo_url="https://example.com/repo.git",
@@ -327,7 +327,7 @@ def test_finish_run_rejects_active_background_jobs(tmp_path: Path) -> None:
     )
     tool = FinishRunTool(lambda: True)
 
-    result = tool.invoke(
+    result = await tool.invoke(
         {
             "status": RunStatus.COMPLETED,
             "problem": "Task",
@@ -341,7 +341,7 @@ def test_finish_run_rejects_active_background_jobs(tmp_path: Path) -> None:
     assert result.error_code == "background_jobs_active"
 
 
-def test_delegation_tools_submit_query_and_list_background_job(
+async def test_delegation_tools_submit_query_and_list_background_job(
     tmp_path: Path,
 ) -> None:
     manager = ControlledSubagentManager()
@@ -355,7 +355,7 @@ def test_delegation_tools_submit_query_and_list_background_job(
         config=AgentConfig(),
     )
 
-    submitted = DelegateTaskTool(manager, supervisor).invoke(  # type: ignore[arg-type]
+    submitted = await DelegateTaskTool(manager, supervisor).invoke(  # type: ignore[arg-type]
         {
             "task": "inspect",
             "allowed_tools": ["read_file"],
@@ -367,8 +367,8 @@ def test_delegation_tools_submit_query_and_list_background_job(
     )
     job_id = submitted.data["background_job"]["job_id"]
     wait_terminal(supervisor, job_id)
-    loaded = DelegatedTaskGetTool(supervisor).invoke({"job_id": job_id}, context)
-    listed = DelegatedTaskListTool(supervisor).invoke(
+    loaded = await DelegatedTaskGetTool(supervisor).invoke({"job_id": job_id}, context)
+    listed = await DelegatedTaskListTool(supervisor).invoke(
         {"status": "succeeded"},
         context,
     )
@@ -387,7 +387,7 @@ def test_delegation_tools_submit_query_and_list_background_job(
     supervisor.shutdown()
 
 
-def test_delegated_task_list_summary_counts_jobs_by_status(tmp_path: Path) -> None:
+async def test_delegated_task_list_summary_counts_jobs_by_status(tmp_path: Path) -> None:
     class StubSupervisor:
         def list(
             self,
@@ -418,12 +418,12 @@ def test_delegated_task_list_summary_counts_jobs_by_status(tmp_path: Path) -> No
         config=AgentConfig(),
     )
 
-    result = DelegatedTaskListTool(StubSupervisor()).invoke({}, context)  # type: ignore[arg-type]
+    result = await DelegatedTaskListTool(StubSupervisor()).invoke({}, context)  # type: ignore[arg-type]
 
     assert result.summary == "listed 2 background job(s): 1 running, 1 succeeded"
 
 
-def test_public_subagent_result_enforces_configured_character_budget() -> None:
+async def test_public_subagent_result_enforces_configured_character_budget() -> None:
     long_text = "x" * 10_000
     result = SubagentResult(
         subagent_id="subagent-1",

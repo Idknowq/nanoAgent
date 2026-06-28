@@ -18,7 +18,7 @@ class SummaryLLM:
         self.calls = 0  # 记录摘要请求次数。
         self.messages: list[AgentMessage] = []  # 记录最近一次摘要请求。
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         self.messages = list(messages)
         return LLMResponse(content="Goal and verified repository state.", stop_reason="end_turn")
@@ -65,7 +65,7 @@ def tool_exchange(call_id: str, content: str) -> list[AgentMessage]:
     ]
 
 
-def test_tool_result_budget_persists_largest_latest_result(tmp_path: Path) -> None:
+async def test_tool_result_budget_persists_largest_latest_result(tmp_path: Path) -> None:
     config = AgentConfig(
         tool_result_budget_chars=250,
         tool_result_preview_chars=16,
@@ -104,7 +104,7 @@ def test_tool_result_budget_persists_largest_latest_result(tmp_path: Path) -> No
     assert messages[2].content == large
 
 
-def test_tool_result_budget_enforces_latest_batch_total(tmp_path: Path) -> None:
+async def test_tool_result_budget_enforces_latest_batch_total(tmp_path: Path) -> None:
     config = AgentConfig(
         tool_result_budget_chars=3_000,
         tool_result_preview_chars=16,
@@ -139,7 +139,7 @@ def test_tool_result_budget_enforces_latest_batch_total(tmp_path: Path) -> None:
     assert prepared_total <= config.tool_result_budget_chars
 
 
-def test_tool_result_budget_uses_run_dir_before_workspace_is_cloned(
+async def test_tool_result_budget_uses_run_dir_before_workspace_is_cloned(
     tmp_path: Path,
 ) -> None:
     config = AgentConfig(
@@ -174,7 +174,7 @@ def test_tool_result_budget_uses_run_dir_before_workspace_is_cloned(
     assert not compactor.workspace_path.exists()
 
 
-def test_tool_result_budget_repairs_truncated_persisted_result(
+async def test_tool_result_budget_repairs_truncated_persisted_result(
     tmp_path: Path,
 ) -> None:
     config = AgentConfig(
@@ -205,7 +205,7 @@ def test_tool_result_budget_repairs_truncated_persisted_result(
     assert target.read_text(encoding="utf-8").strip() == large
 
 
-def test_tool_result_budget_excludes_workspace_artifact_dir_from_git(
+async def test_tool_result_budget_excludes_workspace_artifact_dir_from_git(
     tmp_path: Path,
 ) -> None:
     config = AgentConfig(
@@ -233,7 +233,7 @@ def test_tool_result_budget_excludes_workspace_artifact_dir_from_git(
     assert ".nano-agent/" in exclude_path.read_text(encoding="utf-8")
 
 
-def test_tool_result_budget_excludes_workspace_artifact_dir_from_worktree(
+async def test_tool_result_budget_excludes_workspace_artifact_dir_from_worktree(
     tmp_path: Path,
 ) -> None:
     config = AgentConfig(
@@ -268,7 +268,7 @@ def test_tool_result_budget_excludes_workspace_artifact_dir_from_worktree(
     assert ".nano-agent/" in exclude_path.read_text(encoding="utf-8")
 
 
-def test_snip_compact_keeps_tool_protocol_boundaries(tmp_path: Path) -> None:
+async def test_snip_compact_keeps_tool_protocol_boundaries(tmp_path: Path) -> None:
     config = AgentConfig(
         context_max_input_tokens=1_000,
         context_output_reserve_tokens=0,
@@ -297,7 +297,7 @@ def test_snip_compact_keeps_tool_protocol_boundaries(tmp_path: Path) -> None:
     assert any("earlier messages removed" in message.content for message in prepared)
 
 
-def test_snip_compact_ignores_message_count_below_token_threshold(tmp_path: Path) -> None:
+async def test_snip_compact_ignores_message_count_below_token_threshold(tmp_path: Path) -> None:
     config = AgentConfig(
         context_max_input_tokens=10_000,
         context_output_reserve_tokens=0,
@@ -317,7 +317,7 @@ def test_snip_compact_ignores_message_count_below_token_threshold(tmp_path: Path
     assert prepared == messages
 
 
-def test_micro_compact_only_replaces_old_large_tool_results(tmp_path: Path) -> None:
+async def test_micro_compact_only_replaces_old_large_tool_results(tmp_path: Path) -> None:
     config = AgentConfig(
         micro_keep_recent_tool_results=1,
         micro_tool_result_min_chars=100,
@@ -342,7 +342,7 @@ def test_micro_compact_only_replaces_old_large_tool_results(tmp_path: Path) -> N
     assert tool_messages[1].content == recent
 
 
-def test_prepare_compacts_history_and_persists_transcript(tmp_path: Path) -> None:
+async def test_prepare_compacts_history_and_persists_transcript(tmp_path: Path) -> None:
     config = AgentConfig(
         context_max_input_tokens=1_000,
         context_output_reserve_tokens=0,
@@ -360,7 +360,7 @@ def test_prepare_compacts_history_and_persists_transcript(tmp_path: Path) -> Non
     ]
     store.append_many(messages)
 
-    prepared = compactor.prepare(messages, [])
+    prepared = await compactor.prepare(messages, [])
 
     assert llm.calls == 1
     assert compactor.summary_llm_call_count == 1
@@ -378,7 +378,7 @@ def test_prepare_compacts_history_and_persists_transcript(tmp_path: Path) -> Non
     assert record["success"] is True
 
 
-def test_reactive_compact_keeps_prefix_and_recent_messages(tmp_path: Path) -> None:
+async def test_reactive_compact_keeps_prefix_and_recent_messages(tmp_path: Path) -> None:
     config = AgentConfig(reactive_keep_recent_messages=3)
     compactor, _, store = build_compactor(tmp_path, config)
     messages = [
@@ -388,7 +388,7 @@ def test_reactive_compact_keeps_prefix_and_recent_messages(tmp_path: Path) -> No
     ]
     store.append_many(messages)
 
-    outcome = compactor.reactive_compact(messages, [])
+    outcome = await compactor.reactive_compact(messages, [])
     prepared = outcome.messages
 
     assert prepared[0:2] == messages[0:2]

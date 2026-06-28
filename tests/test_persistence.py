@@ -12,7 +12,7 @@ class TodoThenFinishLLM:
     def __init__(self) -> None:
         self.calls = 0
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         if self.calls == 1:
             return LLMResponse(
@@ -49,7 +49,7 @@ class TodoThenFinishLLM:
         )
 
 
-def test_config_store_writes_effective_config(tmp_path: Path) -> None:
+async def test_config_store_writes_effective_config(tmp_path: Path) -> None:
     config = AgentConfig(
         workspace_root=tmp_path / "workspaces",
         runs_root=tmp_path / "runs",
@@ -65,7 +65,7 @@ def test_config_store_writes_effective_config(tmp_path: Path) -> None:
     assert persisted["config"]["workspace_root"] == str(tmp_path / "workspaces")
 
 
-def test_message_store_appends_and_recovers_complete_messages(tmp_path: Path) -> None:
+async def test_message_store_appends_and_recovers_complete_messages(tmp_path: Path) -> None:
     store = MessageStore(tmp_path / "run-1")
     messages = [
         AgentMessage(role="user", content="inspect repository"),
@@ -86,14 +86,14 @@ def test_message_store_appends_and_recovers_complete_messages(tmp_path: Path) ->
     assert MessageStore(tmp_path / "run-1").load_messages() == messages
 
 
-def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path) -> None:
+async def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path) -> None:
     config = AgentConfig(
         workspace_root=tmp_path / "workspaces",
         runs_root=tmp_path / "runs",
         console_progress_enabled=False,
     )
 
-    result = NanoAgent(config, llm=TodoThenFinishLLM()).run(  # type: ignore[arg-type]
+    result = await NanoAgent(config, llm=TodoThenFinishLLM()).run(  # type: ignore[arg-type]
         "https://example.com/repo.git",
         "Inspect package metadata and repair verified defects.",
     )
@@ -144,7 +144,7 @@ def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path)
     assert "Repository inspection was requested." in report
 
 
-def test_disabled_context_compaction_omits_checkpoint_artifact(tmp_path: Path) -> None:
+async def test_disabled_context_compaction_omits_checkpoint_artifact(tmp_path: Path) -> None:
     config = AgentConfig(
         workspace_root=tmp_path / "workspaces",
         runs_root=tmp_path / "runs",
@@ -152,7 +152,7 @@ def test_disabled_context_compaction_omits_checkpoint_artifact(tmp_path: Path) -
         context_compaction_enabled=False,
     )
 
-    result = NanoAgent(config, llm=TodoThenFinishLLM()).run(  # type: ignore[arg-type]
+    result = await NanoAgent(config, llm=TodoThenFinishLLM()).run(  # type: ignore[arg-type]
         "https://example.com/repo.git",
         "Inspect the repository.",
     )

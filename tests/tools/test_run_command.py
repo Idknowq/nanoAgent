@@ -26,8 +26,8 @@ def make_context(
     )
 
 
-def test_run_command_executes_structured_arguments(tmp_path: Path) -> None:
-    result = RunCommandTool().invoke(
+async def test_run_command_executes_structured_arguments(tmp_path: Path) -> None:
+    result = await RunCommandTool().invoke(
         {"program": "python3", "args": ["-c", "print('hello')"]},
         make_context(tmp_path),
     )
@@ -42,13 +42,13 @@ def test_run_command_executes_structured_arguments(tmp_path: Path) -> None:
     assert result.data["cwd"] == "."
 
 
-def test_python_alias_uses_same_isolated_interpreter_as_python3(tmp_path: Path) -> None:
+async def test_python_alias_uses_same_isolated_interpreter_as_python3(tmp_path: Path) -> None:
     context = make_context(tmp_path)
-    python = RunCommandTool().invoke(
+    python = await RunCommandTool().invoke(
         {"program": "python", "args": ["-c", "import sys; print(sys.executable)"]},
         context,
     )
-    python3 = RunCommandTool().invoke(
+    python3 = await RunCommandTool().invoke(
         {"program": "python3", "args": ["-c", "import sys; print(sys.executable)"]},
         context,
     )
@@ -59,7 +59,7 @@ def test_python_alias_uses_same_isolated_interpreter_as_python3(tmp_path: Path) 
     assert python.data["stdout_tail"] == python3.data["stdout_tail"]
 
 
-def test_run_command_resolves_relative_runtime_dir_before_changing_cwd(
+async def test_run_command_resolves_relative_runtime_dir_before_changing_cwd(
     tmp_path: Path,
     monkeypatch,
 ) -> None:  # type: ignore[no-untyped-def]
@@ -79,7 +79,7 @@ def test_run_command_resolves_relative_runtime_dir_before_changing_cwd(
         ),
     )
 
-    result = RunCommandTool().invoke(
+    result = await RunCommandTool().invoke(
         {"program": "python3", "args": ["-c", "print('hello')"]},
         context,
     )
@@ -89,7 +89,7 @@ def test_run_command_resolves_relative_runtime_dir_before_changing_cwd(
     assert result.data["stdout_tail"] == "hello\n"
 
 
-def test_run_command_isolates_python_and_pip_from_host_environment(
+async def test_run_command_isolates_python_and_pip_from_host_environment(
     tmp_path: Path,
     monkeypatch,
 ) -> None:  # type: ignore[no-untyped-def]
@@ -108,11 +108,11 @@ def test_run_command_isolates_python_and_pip_from_host_environment(
         "}))"
     )
 
-    result = RunCommandTool().invoke(
+    result = await RunCommandTool().invoke(
         {"program": "python3", "args": ["-c", probe]},
         context,
     )
-    pip_result = RunCommandTool().invoke(
+    pip_result = await RunCommandTool().invoke(
         {"program": "python3", "args": ["-m", "pip", "--version"]},
         context,
     )
@@ -130,11 +130,11 @@ def test_run_command_isolates_python_and_pip_from_host_environment(
     assert str(expected_venv) in pip_result.data["stdout_tail"]
 
 
-def test_run_command_does_not_fallback_to_host_pytest(tmp_path: Path) -> None:
+async def test_run_command_does_not_fallback_to_host_pytest(tmp_path: Path) -> None:
     context = make_context(tmp_path)
     context.runtime_dir = context.run_dir / "runtime"
 
-    result = RunCommandTool().invoke(
+    result = await RunCommandTool().invoke(
         {"program": "pytest", "args": ["--version"]},
         context,
     )
@@ -144,10 +144,10 @@ def test_run_command_does_not_fallback_to_host_pytest(tmp_path: Path) -> None:
     assert "not installed in the isolated run environment" in result.error_message
 
 
-def test_run_command_uses_safe_workspace_cwd(tmp_path: Path) -> None:
+async def test_run_command_uses_safe_workspace_cwd(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
 
-    result = RunCommandTool().invoke(
+    result = await RunCommandTool().invoke(
         {
             "program": "python3",
             "args": ["-c", "import os; print(os.path.basename(os.getcwd()))"],
@@ -161,8 +161,8 @@ def test_run_command_uses_safe_workspace_cwd(tmp_path: Path) -> None:
     assert result.data["cwd"] == "src"
 
 
-def test_run_command_rejects_program_outside_allowlist(tmp_path: Path) -> None:
-    result = RunCommandTool().invoke(
+async def test_run_command_rejects_program_outside_allowlist(tmp_path: Path) -> None:
+    result = await RunCommandTool().invoke(
         {"program": "sh", "args": ["-c", "echo unsafe"]},
         make_context(tmp_path),
     )
@@ -171,24 +171,24 @@ def test_run_command_rejects_program_outside_allowlist(tmp_path: Path) -> None:
     assert "not allowed" in result.error_message
 
 
-def test_run_command_suggests_read_file_for_shell_readers(tmp_path: Path) -> None:
+async def test_run_command_suggests_read_file_for_shell_readers(tmp_path: Path) -> None:
     context = make_context(tmp_path)
 
-    sed = RunCommandTool().invoke({"program": "sed"}, context)
-    head = RunCommandTool().invoke({"program": "head"}, context)
-    cat = RunCommandTool().invoke({"program": "cat"}, context)
+    sed = await RunCommandTool().invoke({"program": "sed"}, context)
+    head = await RunCommandTool().invoke({"program": "head"}, context)
+    cat = await RunCommandTool().invoke({"program": "cat"}, context)
 
     assert "read_file with line_start and line_end" in sed.error_message
     assert "read_file with line_start=1" in head.error_message
     assert "Use read_file with path" in cat.error_message
 
 
-def test_run_command_rejects_program_path_and_cwd_escape(tmp_path: Path) -> None:
-    program_path = RunCommandTool().invoke(
+async def test_run_command_rejects_program_path_and_cwd_escape(tmp_path: Path) -> None:
+    program_path = await RunCommandTool().invoke(
         {"program": "/usr/bin/python3", "args": ["--version"]},
         make_context(tmp_path),
     )
-    cwd_escape = RunCommandTool().invoke(
+    cwd_escape = await RunCommandTool().invoke(
         {"program": "python3", "cwd": ".."},
         make_context(tmp_path),
     )
@@ -197,8 +197,8 @@ def test_run_command_rejects_program_path_and_cwd_escape(tmp_path: Path) -> None
     assert cwd_escape.error_code == "invalid_input"
 
 
-def test_run_command_returns_nonzero_exit_as_failure(tmp_path: Path) -> None:
-    result = RunCommandTool().invoke(
+async def test_run_command_returns_nonzero_exit_as_failure(tmp_path: Path) -> None:
+    result = await RunCommandTool().invoke(
         {"program": "python3", "args": ["-c", "raise SystemExit(7)"]},
         make_context(tmp_path),
     )
@@ -208,8 +208,8 @@ def test_run_command_returns_nonzero_exit_as_failure(tmp_path: Path) -> None:
     assert result.data["exit_code"] == 7
 
 
-def test_run_command_truncates_output_tails(tmp_path: Path) -> None:
-    result = RunCommandTool().invoke(
+async def test_run_command_truncates_output_tails(tmp_path: Path) -> None:
+    result = await RunCommandTool().invoke(
         {
             "program": "python3",
             "args": ["-c", "import sys; print('abcdefgh'); print('12345678', file=sys.stderr)"],
@@ -221,8 +221,8 @@ def test_run_command_truncates_output_tails(tmp_path: Path) -> None:
     assert result.data["stderr_tail"] == "678\n"
 
 
-def test_run_command_terminates_timed_out_process(tmp_path: Path) -> None:
-    result = RunCommandTool().invoke(
+async def test_run_command_terminates_timed_out_process(tmp_path: Path) -> None:
+    result = await RunCommandTool().invoke(
         {
             "program": "python3",
             "args": ["-c", "import time; time.sleep(10)"],

@@ -32,7 +32,7 @@ class PermissionHook(NoOpHook):
     def __init__(self, policy: PermissionPolicy) -> None:
         self.policy = policy
 
-    def before_tool_call(
+    async def before_tool_call(
         self,
         context: ToolContext,
         tool: RuntimeTool,

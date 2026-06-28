@@ -27,7 +27,7 @@ def completed(stdout: str = "", stderr: str = "", returncode: int = 0):
     )
 
 
-def test_clone_repo_clones_and_returns_repository_metadata(tmp_path: Path, monkeypatch) -> None:
+async def test_clone_repo_clones_and_returns_repository_metadata(tmp_path: Path, monkeypatch) -> None:
     responses = iter(
         [
             completed(),
@@ -45,7 +45,7 @@ def test_clone_repo_clones_and_returns_repository_metadata(tmp_path: Path, monke
     monkeypatch.setattr(subprocess, "run", fake_run)
     context = make_context(tmp_path)
 
-    result = CloneRepoTool().invoke({"repo_url": REPO_URL, "depth": 1}, context)
+    result = await CloneRepoTool().invoke({"repo_url": REPO_URL, "depth": 1}, context)
 
     assert result.success
     assert result.data["commit"] == "abc123"
@@ -56,22 +56,22 @@ def test_clone_repo_clones_and_returns_repository_metadata(tmp_path: Path, monke
     assert context.workspace_path.is_dir()
 
 
-def test_clone_repo_rejects_nonempty_workspace(tmp_path: Path) -> None:
+async def test_clone_repo_rejects_nonempty_workspace(tmp_path: Path) -> None:
     context = make_context(tmp_path)
     context.workspace_path.mkdir()
     (context.workspace_path / "existing.txt").touch()
 
-    result = CloneRepoTool().invoke({"repo_url": REPO_URL}, context)
+    result = await CloneRepoTool().invoke({"repo_url": REPO_URL}, context)
 
     assert result.error_code == "invalid_input"
     assert "empty" in result.error_message
 
 
-def test_clone_repo_rejects_untrusted_or_mismatched_url(tmp_path: Path) -> None:
+async def test_clone_repo_rejects_untrusted_or_mismatched_url(tmp_path: Path) -> None:
     context = make_context(tmp_path)
 
-    local = CloneRepoTool().invoke({"repo_url": "file:///tmp/repo"}, context)
-    mismatched = CloneRepoTool().invoke(
+    local = await CloneRepoTool().invoke({"repo_url": "file:///tmp/repo"}, context)
+    mismatched = await CloneRepoTool().invoke(
         {"repo_url": "https://github.com/other/repo.git"},
         context,
     )
@@ -81,14 +81,14 @@ def test_clone_repo_rejects_untrusted_or_mismatched_url(tmp_path: Path) -> None:
     assert "current run" in mismatched.error_message
 
 
-def test_clone_repo_returns_git_failure_details(tmp_path: Path, monkeypatch) -> None:
+async def test_clone_repo_returns_git_failure_details(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         subprocess,
         "run",
         lambda *args, **kwargs: completed(stderr="authentication failed", returncode=128),
     )
 
-    result = CloneRepoTool().invoke({"repo_url": REPO_URL}, make_context(tmp_path))
+    result = await CloneRepoTool().invoke({"repo_url": REPO_URL}, make_context(tmp_path))
 
     assert not result.success
     assert result.error_code == "clone_failed"
@@ -96,25 +96,25 @@ def test_clone_repo_returns_git_failure_details(tmp_path: Path, monkeypatch) -> 
     assert result.data["stderr_tail"] == "authentication failed"
 
 
-def test_clone_repo_returns_timeout(tmp_path: Path, monkeypatch) -> None:
+async def test_clone_repo_returns_timeout(tmp_path: Path, monkeypatch) -> None:
     def raise_timeout(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise subprocess.TimeoutExpired(cmd="git", timeout=120)
 
     monkeypatch.setattr(subprocess, "run", raise_timeout)
 
-    result = CloneRepoTool().invoke({"repo_url": REPO_URL}, make_context(tmp_path))
+    result = await CloneRepoTool().invoke({"repo_url": REPO_URL}, make_context(tmp_path))
 
     assert not result.success
     assert result.error_code == "timeout"
 
 
-def test_clone_repo_returns_missing_git_error(tmp_path: Path, monkeypatch) -> None:
+async def test_clone_repo_returns_missing_git_error(tmp_path: Path, monkeypatch) -> None:
     def raise_missing(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise FileNotFoundError
 
     monkeypatch.setattr(subprocess, "run", raise_missing)
 
-    result = CloneRepoTool().invoke({"repo_url": REPO_URL}, make_context(tmp_path))
+    result = await CloneRepoTool().invoke({"repo_url": REPO_URL}, make_context(tmp_path))
 
     assert result.error_code == "execution_error"
     assert "not found" in result.error_message

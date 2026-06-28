@@ -212,7 +212,7 @@ class ContextCompactor:
         self.reactive_compact_attempts = 0  # 已执行的应急压缩次数。
         self.summary_llm_call_count = 0  # 自动摘要额外发起的 LLM 调用次数。
 
-    def prepare(
+    async def prepare(
         self,
         messages: list[AgentMessage],
         tools: list[ToolSpec],
@@ -226,7 +226,7 @@ class ContextCompactor:
             self.should_auto_compact(prepared, tools)
             and self.auto_compact_attempts < self.config.max_auto_compactions
         ):
-            compacted = self.compact_history(prepared, tools)
+            compacted = await self.compact_history(prepared, tools)
             if self.estimator.estimate(compacted, tools) >= self.estimator.estimate(
                 prepared, tools
             ):
@@ -336,7 +336,7 @@ class ContextCompactor:
         )
         return max(1, int(usable * self.config.snip_compact_ratio))
 
-    def compact_history(
+    async def compact_history(
         self,
         messages: list[AgentMessage],
         tools: list[ToolSpec],
@@ -349,7 +349,7 @@ class ContextCompactor:
             attempt=self.auto_compact_attempts,
         )
         try:
-            summary = self._summarize(messages, transcript)
+            summary = await self._summarize(messages, transcript)
             compacted = self._summary_context(messages, summary, transcript)
             after = self.estimator.estimate(compacted, tools)
             success = after < before
@@ -374,7 +374,7 @@ class ContextCompactor:
         )
         return compacted
 
-    def reactive_compact(
+    async def reactive_compact(
         self,
         messages: list[AgentMessage],
         tools: list[ToolSpec],
@@ -430,7 +430,7 @@ class ContextCompactor:
     def can_reactive_compact(self) -> bool:
         return self.reactive_compact_attempts < self.config.max_reactive_compactions
 
-    def _summarize(self, messages: list[AgentMessage], transcript: Path) -> str:
+    async def _summarize(self, messages: list[AgentMessage], transcript: Path) -> str:
         state = CompactionStateBuilder().build(
             repo_url=self.repo_url,
             workspace_path=self.workspace_path,
@@ -457,7 +457,7 @@ class ContextCompactor:
             f"Conversation:\n{conversation}"
         )
         self.summary_llm_call_count += 1
-        response = self.llm.complete(
+        response = await self.llm.complete(
             [
                 AgentMessage(role="system", content=instructions),
                 AgentMessage(role="user", content=source),

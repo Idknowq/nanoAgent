@@ -122,7 +122,7 @@ class GrepTool(RuntimeTool):
     input_model = GrepInput  # 工具输入参数校验模型。
     input_schema = GrepInput.model_json_schema()  # 暴露给 LLM 的输入结构。
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         try:
             root = resolve_workspace_path(
                 context.workspace_path,

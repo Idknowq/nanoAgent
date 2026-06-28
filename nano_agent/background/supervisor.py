@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -190,7 +191,7 @@ class BackgroundJobSupervisor:
             job.started_at = datetime.now(timezone.utc)
             self.store.save(job)
         self._start_task(job)
-        result = self.manager.execute(prepared, token)
+        result = asyncio.run(self.manager.execute(prepared, token))
         self._complete(job_id, result)
 
     def _complete(self, job_id: str, result: SubagentResult) -> None:

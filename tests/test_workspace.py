@@ -6,7 +6,7 @@ from nano_agent.models import RunSummary
 from nano_agent.workspace import WorkspaceManager
 
 
-def test_save_run_summary_uses_per_run_directory(tmp_path: Path) -> None:
+async def test_save_run_summary_uses_per_run_directory(tmp_path: Path) -> None:
     config = AgentConfig(runs_root=tmp_path / "runs")
     manager = WorkspaceManager(config)
     run = RunSummary(run_id="run-1", repo_url="https://example.com/repo.git")
@@ -21,7 +21,7 @@ def test_save_run_summary_uses_per_run_directory(tmp_path: Path) -> None:
     assert "tool_calls" not in persisted
 
 
-def test_run_dir_does_not_create_directory(tmp_path: Path) -> None:
+async def test_run_dir_does_not_create_directory(tmp_path: Path) -> None:
     config = AgentConfig(runs_root=tmp_path / "runs")
     manager = WorkspaceManager(config)
 

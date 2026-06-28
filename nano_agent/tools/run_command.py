@@ -44,7 +44,7 @@ class RunCommandTool(RuntimeTool):
     input_model = RunCommandInput
     input_schema = RunCommandInput.model_json_schema()
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         program = validate_program(input_data["program"])
         try:
             cwd = resolve_workspace_path(

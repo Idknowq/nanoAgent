@@ -39,7 +39,7 @@ class CloneRepoTool(RuntimeTool):
     input_model = CloneRepoInput
     input_schema = CloneRepoInput.model_json_schema()
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         repo_url = input_data["repo_url"]
         self._validate_repo_url(repo_url)
         if repo_url != context.repo_url:

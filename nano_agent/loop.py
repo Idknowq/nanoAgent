@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 
 from nano_agent.config import AgentConfig
@@ -43,11 +44,11 @@ class AgentLoop:
         message_store: MessageStore | None = None,
         compactor: ContextCompactor | None = None,
         retry_policy: RetryPolicy | None = None,
-        sleeper: Callable[[float], None] = time.sleep,
+        sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
         max_llm_calls: int | None = None,
         reserve_final_step: bool = False,
         cancellation_token: CancellationToken | None = None,
-        idle_waiter: Callable[[float], bool] | None = None,
+        idle_waiter: Callable[[float], Awaitable[bool]] | None = None,
     ) -> None:
         self.config = config  # 保存最大步数等循环控制配置。
         self.llm = llm  # 保存当前使用的 LLM 客户端。
@@ -67,7 +68,7 @@ class AgentLoop:
         self.cancellation_token = cancellation_token  # 当前运行的合作式取消信号。
         self.idle_waiter = idle_waiter  # 等待任一后台 Job 完成的运行时回调。
 
-    def run(self, run: RunSummary, initial_messages: list[AgentMessage]) -> RunSummary:
+    async def run(self, run: RunSummary, initial_messages: list[AgentMessage]) -> RunSummary:
         messages = list(initial_messages)
         run.messages = messages
         if self.message_store is not None:
@@ -119,9 +120,9 @@ class AgentLoop:
             if self.compactor is not None:
                 self._raise_if_cancelled()
                 summary_calls = self.compactor.summary_llm_call_count
-                messages = self.compactor.prepare(messages, tool_specs)
+                messages = await self.compactor.prepare(messages, tool_specs)
                 run.llm_call_count += self.compactor.summary_llm_call_count - summary_calls
-            response, messages, deferred_hook_messages = self._call_llm_with_recovery(
+            response, messages, deferred_hook_messages = await self._call_llm_with_recovery(
                 run,
                 messages,
                 tool_specs,
@@ -274,9 +275,9 @@ class AgentLoop:
                     for hook in self.hooks:
                         self._append_hook_messages(
                             deferred_hook_messages,
-                            hook.before_tool_call(self.context, tool, tool_use),
+                            await hook.before_tool_call(self.context, tool, tool_use),
                         )
-                    result = tool.invoke(tool_use.input, self.context)
+                    result = await tool.invoke(tool_use.input, self.context)
                     if isinstance(tool, FinishRunTool) and result.success:
                         result, completion_report = self._validate_completion(
                             result,
@@ -286,7 +287,7 @@ class AgentLoop:
                     for hook in self.hooks:
                         self._append_hook_messages(
                             deferred_hook_messages,
-                            hook.after_tool_call(
+                            await hook.after_tool_call(
                                 self.context,
                                 tool,
                                 tool_use,
@@ -297,7 +298,7 @@ class AgentLoop:
                     self._raise_if_cancelled()
                 except Exception as exc:
                     for hook in self.hooks:
-                        hook.on_error(self.context, exc)
+                        await hook.on_error(self.context, exc)
                     raise
                 run.tool_calls.append(
                     ToolCallRecord(
@@ -327,7 +328,7 @@ class AgentLoop:
                     and result.error_code == "background_jobs_active"
                     and self.idle_waiter is not None
                 ):
-                    self._idle_wait(messages)
+                    await self._idle_wait(messages)
                 if completion_report is not None:
                     self._append_messages(messages, deferred_hook_messages)
                     run.completion_report = completion_report
@@ -336,7 +337,7 @@ class AgentLoop:
                     return run
 
             if self._only_active_background_queries(round_tool_results):
-                self._idle_wait(messages)
+                await self._idle_wait(messages)
             self._append_messages(messages, deferred_hook_messages)
             run.messages = messages
 
@@ -356,7 +357,7 @@ class AgentLoop:
         run.messages = messages
         return run
 
-    def _call_llm_with_recovery(
+    async def _call_llm_with_recovery(
         self,
         run: RunSummary,
         messages: list[AgentMessage],
@@ -373,7 +374,7 @@ class AgentLoop:
 
         while True:
             try:
-                response, deferred = self._perform_llm_request(
+                response, deferred = await self._perform_llm_request(
                     run,
                     messages,
                     tool_specs,
@@ -409,7 +410,7 @@ class AgentLoop:
                 if exc.retryable and transient_retries < self.config.llm_max_transient_retries:
                     transient_retries += 1
                     retry_delay = self.retry_policy.delay_seconds(exc, transient_retries)
-                    self._sleep(retry_delay)
+                    await self._sleep(retry_delay)
                     attempt_type = "transient"
                     attempt_index = transient_retries
                     recovered_from = failed_call_id
@@ -420,7 +421,7 @@ class AgentLoop:
                     and self.compactor is not None
                     and self.compactor.can_reactive_compact()
                 ):
-                    outcome = self.compactor.reactive_compact(messages, tool_specs)
+                    outcome = await self.compactor.reactive_compact(messages, tool_specs)
                     reactive_used = True
                     if not outcome.reduced:
                         raise LLMServiceError(
@@ -469,7 +470,7 @@ class AgentLoop:
             recovered_from = truncated_call_id
             retry_delay = None
 
-    def _perform_llm_request(
+    async def _perform_llm_request(
         self,
         run: RunSummary,
         messages: list[AgentMessage],
@@ -497,21 +498,21 @@ class AgentLoop:
         for hook in self.hooks:
             self._append_hook_messages_to_conversation(
                 messages,
-                hook.before_llm_call(self.context, messages, tool_specs),
+                await hook.before_llm_call(self.context, messages, tool_specs),
             )
 
         run.llm_call_count += 1
         self.context.current_llm_started_at = datetime.now(timezone.utc)
         started = time.monotonic()
         try:
-            response = self.llm.complete(messages=messages, tools=tool_specs)
+            response = await self.llm.complete(messages=messages, tools=tool_specs)
         except AgentCancelledError:
             raise
         except Exception as exc:
             self.context.current_llm_duration_seconds = time.monotonic() - started
             normalized = normalize_llm_error(exc)
             for hook in self.hooks:
-                hook.on_error(self.context, normalized)
+                await hook.on_error(self.context, normalized)
             if normalized is exc:
                 raise
             raise normalized from exc
@@ -520,7 +521,7 @@ class AgentLoop:
         for hook in self.hooks:
             self._append_hook_messages(
                 deferred,
-                hook.after_llm_call(self.context, response),
+                await hook.after_llm_call(self.context, response),
             )
         self._raise_if_cancelled()
         return response, deferred
@@ -529,17 +530,17 @@ class AgentLoop:
         if self.cancellation_token is not None:
             self.cancellation_token.raise_if_cancelled()
 
-    def _sleep(self, delay_seconds: float) -> None:
+    async def _sleep(self, delay_seconds: float) -> None:
         if self.cancellation_token is None:
-            self.sleeper(delay_seconds)
+            await self.sleeper(delay_seconds)
             return
-        if self.cancellation_token.wait(delay_seconds):
+        if await asyncio.to_thread(self.cancellation_token.wait, delay_seconds):
             self.cancellation_token.raise_if_cancelled()
 
-    def _idle_wait(self, messages: list[AgentMessage]) -> None:
+    async def _idle_wait(self, messages: list[AgentMessage]) -> None:
         if self.idle_waiter is None:
             return
-        completed = self.idle_waiter(self.config.background_idle_wait_timeout_seconds)
+        completed = await self.idle_waiter(self.config.background_idle_wait_timeout_seconds)
         if completed:
             return
         self._append_messages(

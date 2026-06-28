@@ -42,7 +42,7 @@ class AuditHook(NoOpHook):
     def write_errors(self) -> list[str]:
         return list(self._write_errors)
 
-    def after_tool_call(
+    async def after_tool_call(
         self,
         context: ToolContext,
         tool: RuntimeTool,

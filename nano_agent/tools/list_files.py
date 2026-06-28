@@ -60,7 +60,7 @@ class ListFilesTool(RuntimeTool):
     input_model = ListFilesInput
     input_schema = ListFilesInput.model_json_schema()
 
-    def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         requested_path = input_data["path"]
         supplied = Path(requested_path)
         if supplied.is_absolute() and supplied.resolve(strict=False) == (

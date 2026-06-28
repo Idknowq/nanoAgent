@@ -94,7 +94,7 @@ class RuntimeTool(ABC):
     is_mutating: ClassVar[bool] = False  # 工具是否可能修改环境或外部状态。
     input_model: ClassVar[type[BaseModel] | None] = None  # 工具运行时输入校验模型。
 
-    def invoke(self, input_data: dict[str, Any], context: ToolContext) -> ToolResult:
+    async def invoke(self, input_data: dict[str, Any], context: ToolContext) -> ToolResult:
         """Validate common preconditions and convert expected failures to results."""
         if self.requires_workspace:
             workspace = context.workspace_path
@@ -111,7 +111,7 @@ class RuntimeTool(ABC):
 
         try:
             validated = self.validate_input(input_data)
-            return self.run(validated, context)
+            return await self.run(validated, context)
         except ValidationError as exc:
             return ToolResult.failure(code="invalid_input", message=str(exc))
         except ToolError as exc:
@@ -128,7 +128,7 @@ class RuntimeTool(ABC):
         return input_data
 
     @abstractmethod
-    def run(self, input_data: dict[str, Any], context: ToolContext) -> ToolResult:
+    async def run(self, input_data: dict[str, Any], context: ToolContext) -> ToolResult:
         """执行工具并返回统一结果。"""
 
 

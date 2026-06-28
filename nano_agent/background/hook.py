@@ -14,7 +14,7 @@ class BackgroundCompletionHook(NoOpHook):
     def __init__(self, supervisor: BackgroundJobSupervisor) -> None:
         self.supervisor = supervisor  # 提供当前主运行尚未消费的后台完成事件。
 
-    def before_llm_call(self, context, messages, tools) -> HookResult | None:  # type: ignore[no-untyped-def]
+    async def before_llm_call(self, context, messages, tools) -> HookResult | None:  # type: ignore[no-untyped-def]
         del context, messages, tools
         events = self.supervisor.drain_events()
         if not events:

@@ -12,8 +12,13 @@ from nano_agent.services.errors import LLMErrorKind, LLMServiceError
 from nano_agent.tools.base import ToolContext, ToolRegistry
 
 
+async def noop_sleep(delay: float) -> None:
+    """Async sleeper used by retry tests that should not wait."""
+    del delay
+
+
 class SuccessfulLLM:
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         return LLMResponse(
             content="done",
             stop_reason="end_turn",
@@ -29,7 +34,7 @@ class SuccessfulLLM:
 
 
 class FailingLLM:
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         raise RuntimeError("provider unavailable")
 
 
@@ -37,7 +42,7 @@ class RateLimitedOnceLLM:
     def __init__(self) -> None:
         self.calls = 0
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         if self.calls == 1:
             raise LLMServiceError(
@@ -52,7 +57,7 @@ class InvalidResponseOnceLLM:
     def __init__(self) -> None:
         self.calls = 0  # 记录失败和恢复调用次数。
 
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.calls += 1
         if self.calls == 1:
             raise LLMServiceError(
@@ -65,7 +70,7 @@ class InvalidResponseOnceLLM:
 
 
 class FailingBeforeHook(NoOpHook):
-    def before_llm_call(self, context, messages, tools):  # type: ignore[no-untyped-def]
+    async def before_llm_call(self, context, messages, tools):  # type: ignore[no-untyped-def]
         raise RuntimeError("hook failed before request")
 
 
@@ -89,7 +94,7 @@ def read_records(context: ToolContext) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-def test_llm_metrics_hook_records_usage_and_duration(tmp_path: Path) -> None:
+async def test_llm_metrics_hook_records_usage_and_duration(tmp_path: Path) -> None:
     context = make_context(tmp_path)
     loop = AgentLoop(
         config=context.config,
@@ -99,7 +104,7 @@ def test_llm_metrics_hook_records_usage_and_duration(tmp_path: Path) -> None:
         hooks=[LLMMetricsHook()],
     )
 
-    result = loop.run(
+    result = await loop.run(
         RunSummary(run_id=context.run_id, repo_url=context.repo_url),
         [AgentMessage(role="user", content="start")],
     )
@@ -115,7 +120,7 @@ def test_llm_metrics_hook_records_usage_and_duration(tmp_path: Path) -> None:
     assert record["success"]
 
 
-def test_llm_metrics_hook_records_failed_calls(tmp_path: Path) -> None:
+async def test_llm_metrics_hook_records_failed_calls(tmp_path: Path) -> None:
     context = make_context(tmp_path)
     loop = AgentLoop(
         config=context.config,
@@ -126,7 +131,7 @@ def test_llm_metrics_hook_records_failed_calls(tmp_path: Path) -> None:
     )
 
     with pytest.raises(RuntimeError, match="provider unavailable"):
-        loop.run(
+        await loop.run(
             RunSummary(run_id=context.run_id, repo_url=context.repo_url),
             [AgentMessage(role="user", content="start")],
         )
@@ -138,7 +143,7 @@ def test_llm_metrics_hook_records_failed_calls(tmp_path: Path) -> None:
     assert record["error_message"] == "provider unavailable"
 
 
-def test_llm_metrics_hook_does_not_record_unstarted_calls(tmp_path: Path) -> None:
+async def test_llm_metrics_hook_does_not_record_unstarted_calls(tmp_path: Path) -> None:
     context = make_context(tmp_path)
     loop = AgentLoop(
         config=context.config,
@@ -149,7 +154,7 @@ def test_llm_metrics_hook_does_not_record_unstarted_calls(tmp_path: Path) -> Non
     )
 
     with pytest.raises(RuntimeError, match="hook failed before request"):
-        loop.run(
+        await loop.run(
             RunSummary(run_id=context.run_id, repo_url=context.repo_url),
             [AgentMessage(role="user", content="start")],
         )
@@ -157,7 +162,7 @@ def test_llm_metrics_hook_does_not_record_unstarted_calls(tmp_path: Path) -> Non
     assert not (context.run_dir / "llm_calls.jsonl").exists()
 
 
-def test_llm_metrics_hook_records_recovery_attempt_metadata(tmp_path: Path) -> None:
+async def test_llm_metrics_hook_records_recovery_attempt_metadata(tmp_path: Path) -> None:
     context = make_context(tmp_path)
     context.config.llm_retry_jitter_seconds = 0
     loop = AgentLoop(
@@ -166,10 +171,10 @@ def test_llm_metrics_hook_records_recovery_attempt_metadata(tmp_path: Path) -> N
         tools=ToolRegistry(),
         context=context,
         hooks=[LLMMetricsHook()],
-        sleeper=lambda _: None,
+        sleeper=noop_sleep,
     )
 
-    loop.run(
+    await loop.run(
         RunSummary(run_id=context.run_id, repo_url=context.repo_url),
         [AgentMessage(role="user", content="start")],
     )
@@ -184,7 +189,7 @@ def test_llm_metrics_hook_records_recovery_attempt_metadata(tmp_path: Path) -> N
     assert recovered["retry_delay_seconds"] == context.config.llm_retry_base_seconds
 
 
-def test_llm_metrics_hook_records_invalid_tool_call_and_recovery(
+async def test_llm_metrics_hook_records_invalid_tool_call_and_recovery(
     tmp_path: Path,
 ) -> None:
     context = make_context(tmp_path)
@@ -196,7 +201,7 @@ def test_llm_metrics_hook_records_invalid_tool_call_and_recovery(
         hooks=[LLMMetricsHook()],
     )
 
-    loop.run(
+    await loop.run(
         RunSummary(run_id=context.run_id, repo_url=context.repo_url),
         [AgentMessage(role="user", content="start")],
     )

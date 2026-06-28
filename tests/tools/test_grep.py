@@ -15,11 +15,11 @@ def make_context(tmp_path: Path) -> ToolContext:
     )
 
 
-def test_grep_returns_line_context_and_byte_offset(tmp_path: Path) -> None:
+async def test_grep_returns_line_context_and_byte_offset(tmp_path: Path) -> None:
     content = "alpha\nbefore\ndef make_metavar(value):\nafter\n"
     (tmp_path / "core.py").write_text(content, encoding="utf-8")
 
-    result = GrepTool().invoke(
+    result = await GrepTool().invoke(
         {
             "pattern": r"def make_metavar",
             "path": ".",
@@ -38,10 +38,10 @@ def test_grep_returns_line_context_and_byte_offset(tmp_path: Path) -> None:
     assert match["context_after"] == ["after"]
 
 
-def test_grep_supports_file_path_case_insensitive_and_match_limit(tmp_path: Path) -> None:
+async def test_grep_supports_file_path_case_insensitive_and_match_limit(tmp_path: Path) -> None:
     (tmp_path / "sample.py").write_text("Usage\nusage\nUSAGE\n", encoding="utf-8")
 
-    result = GrepTool().invoke(
+    result = await GrepTool().invoke(
         {
             "pattern": "usage",
             "path": "sample.py",
@@ -56,7 +56,7 @@ def test_grep_supports_file_path_case_insensitive_and_match_limit(tmp_path: Path
     assert result.data["truncated"]
 
 
-def test_grep_skips_binary_ignored_and_symlink_files(tmp_path: Path) -> None:
+async def test_grep_skips_binary_ignored_and_symlink_files(tmp_path: Path) -> None:
     outside = tmp_path.parent / "outside-grep"
     outside.mkdir(exist_ok=True)
     (outside / "secret.py").write_text("needle", encoding="utf-8")
@@ -65,7 +65,7 @@ def test_grep_skips_binary_ignored_and_symlink_files(tmp_path: Path) -> None:
     (tmp_path / "binary.txt").write_bytes(b"\x00needle")
     (tmp_path / "source.py").write_text("needle", encoding="utf-8")
 
-    result = GrepTool().invoke(
+    result = await GrepTool().invoke(
         {"pattern": "needle", "path": "."},
         make_context(tmp_path),
     )
@@ -73,9 +73,9 @@ def test_grep_skips_binary_ignored_and_symlink_files(tmp_path: Path) -> None:
     assert [match["path"] for match in result.data["matches"]] == ["source.py"]
 
 
-def test_grep_rejects_invalid_regex_and_workspace_escape(tmp_path: Path) -> None:
-    invalid_regex = GrepTool().invoke({"pattern": "["}, make_context(tmp_path))
-    escaped = GrepTool().invoke(
+async def test_grep_rejects_invalid_regex_and_workspace_escape(tmp_path: Path) -> None:
+    invalid_regex = await GrepTool().invoke({"pattern": "["}, make_context(tmp_path))
+    escaped = await GrepTool().invoke(
         {"pattern": "value", "path": ".."},
         make_context(tmp_path),
     )

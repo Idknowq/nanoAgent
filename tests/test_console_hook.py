@@ -58,7 +58,7 @@ class FailingRenderer:
 
 
 class RiskyCommandLLM:
-    def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         return LLMResponse(
             stop_reason="tool_use",
             tool_uses=[
@@ -71,13 +71,13 @@ class RiskyCommandLLM:
         )
 
 
-def test_console_hook_renders_llm_lifecycle(tmp_path: Path) -> None:
+async def test_console_hook_renders_llm_lifecycle(tmp_path: Path) -> None:
     renderer = RecordingRenderer()
     hook = ConsoleProgressHook(renderer=renderer)
     context = make_context(tmp_path)
 
-    hook.before_llm_call(context, [], [])
-    hook.after_llm_call(
+    await hook.before_llm_call(context, [], [])
+    await hook.after_llm_call(
         context,
         LLMResponse(
             stop_reason="tool_use",
@@ -87,7 +87,7 @@ def test_console_hook_renders_llm_lifecycle(tmp_path: Path) -> None:
             tool_uses=[ToolUseRequest(id="call-1", name="read_file")],
         ),
     )
-    hook.after_llm_call(context, LLMResponse(stop_reason="end_turn"))
+    await hook.after_llm_call(context, LLMResponse(stop_reason="end_turn"))
 
     assert [event.type for event in renderer.events] == [
         ConsoleEventType.LLM_STARTED,
@@ -102,7 +102,7 @@ def test_console_hook_renders_llm_lifecycle(tmp_path: Path) -> None:
     assert renderer.events[2].stop_reason == "end_turn"
 
 
-def test_console_hook_renders_tool_success_failure_and_sections(tmp_path: Path) -> None:
+async def test_console_hook_renders_tool_success_failure_and_sections(tmp_path: Path) -> None:
     renderer = RecordingRenderer()
     hook = ConsoleProgressHook(
         renderer=renderer,
@@ -112,15 +112,15 @@ def test_console_hook_renders_tool_success_failure_and_sections(tmp_path: Path) 
     tool = TodoWriteTool()
     tool_use = ToolUseRequest(id="call-1", name=tool.name)
 
-    hook.before_tool_call(context, tool, tool_use)
-    hook.after_tool_call(
+    await hook.before_tool_call(context, tool, tool_use)
+    await hook.after_tool_call(
         context,
         tool,
         tool_use,
         ToolResult(success=True, summary="ok"),
         0.125,
     )
-    hook.after_tool_call(
+    await hook.after_tool_call(
         context,
         tool,
         tool_use,
@@ -138,17 +138,17 @@ def test_console_hook_renders_tool_success_failure_and_sections(tmp_path: Path) 
     assert [section.key for section in renderer.sections] == ["todo", "todo"]
 
 
-def test_console_hook_renders_errors(tmp_path: Path) -> None:
+async def test_console_hook_renders_errors(tmp_path: Path) -> None:
     renderer = RecordingRenderer()
     hook = ConsoleProgressHook(renderer=renderer)
 
-    hook.on_error(make_context(tmp_path), RuntimeError("broken"))
+    await hook.on_error(make_context(tmp_path), RuntimeError("broken"))
 
     assert renderer.events[0].type == ConsoleEventType.ERROR
     assert renderer.events[0].result_summary == "RuntimeError: broken"
 
 
-def test_console_hook_isolates_renderer_errors(tmp_path: Path) -> None:
+async def test_console_hook_isolates_renderer_errors(tmp_path: Path) -> None:
     hook = ConsoleProgressHook(
         renderer=FailingRenderer(),
         section_providers=[StaticSectionProvider()],
@@ -157,8 +157,8 @@ def test_console_hook_isolates_renderer_errors(tmp_path: Path) -> None:
     tool = TodoWriteTool()
     tool_use = ToolUseRequest(id="call-1", name=tool.name)
 
-    hook.before_llm_call(context, [], [])
-    hook.after_tool_call(
+    await hook.before_llm_call(context, [], [])
+    await hook.after_tool_call(
         context,
         tool,
         tool_use,
@@ -172,7 +172,7 @@ def test_console_hook_isolates_renderer_errors(tmp_path: Path) -> None:
     assert "external mutation" not in hook.render_errors
 
 
-def test_rich_console_renderer_outputs_events_and_sections() -> None:
+async def test_rich_console_renderer_outputs_events_and_sections() -> None:
     output = StringIO()
     renderer = RichConsoleRenderer(
         Console(file=output, color_system=None, force_terminal=False, width=120)
@@ -197,7 +197,7 @@ def test_rich_console_renderer_outputs_events_and_sections() -> None:
     ]
 
 
-def test_rich_console_renderer_labels_recovery_attempts() -> None:
+async def test_rich_console_renderer_labels_recovery_attempts() -> None:
     output = StringIO()
     renderer = RichConsoleRenderer(
         Console(file=output, color_system=None, force_terminal=False, width=120)
@@ -221,7 +221,7 @@ def test_rich_console_renderer_labels_recovery_attempts() -> None:
     )
 
 
-def test_rich_console_renderer_labels_subagent_events() -> None:
+async def test_rich_console_renderer_labels_subagent_events() -> None:
     output = StringIO()
     renderer = RichConsoleRenderer(
         Console(file=output, color_system=None, force_terminal=False, width=120)
@@ -243,7 +243,7 @@ def test_rich_console_renderer_labels_subagent_events() -> None:
     assert output.getvalue().strip() == "[SUB subagent-2] → read_file  README.md"
 
 
-def test_permission_rejection_renders_error_without_tool_running(tmp_path: Path) -> None:
+async def test_permission_rejection_renders_error_without_tool_running(tmp_path: Path) -> None:
     renderer = RecordingRenderer()
     console_hook = ConsoleProgressHook(renderer=renderer)
     context = make_context(tmp_path)
@@ -256,7 +256,7 @@ def test_permission_rejection_renders_error_without_tool_running(tmp_path: Path)
     )
 
     with pytest.raises(PermissionDeniedError):
-        loop.run(
+        await loop.run(
             RunSummary(run_id=context.run_id, repo_url=context.repo_url),
             [AgentMessage(role="user", content="start")],
         )

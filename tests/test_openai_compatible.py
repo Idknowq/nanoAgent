@@ -45,7 +45,7 @@ class FakeOpenAI:
         self.chat = SimpleNamespace(completions=self.completions)
 
 
-def test_openai_compatible_client_parses_tool_calls() -> None:
+async def test_openai_compatible_client_parses_tool_calls() -> None:
     fake = FakeOpenAI()
     client = OpenAICompatibleLLMClient(  # type: ignore[arg-type]
         client=fake,
@@ -56,7 +56,7 @@ def test_openai_compatible_client_parses_tool_calls() -> None:
     )
     tools = ToolRegistry([TodoWriteTool()]).specs()
 
-    response = client.complete([AgentMessage(role="user", content="start")], tools)
+    response = await client.complete([AgentMessage(role="user", content="start")], tools)
 
     assert response.stop_reason == "tool_use"
     assert response.provider_stop_reason == "tool_calls"
@@ -77,7 +77,7 @@ def test_openai_compatible_client_parses_tool_calls() -> None:
     ]
 
 
-def test_openai_message_conversion_preserves_assistant_tool_calls() -> None:
+async def test_openai_message_conversion_preserves_assistant_tool_calls() -> None:
     client = OpenAICompatibleLLMClient(client=OpenAI(api_key="test"), model="test")
     message = AgentMessage(
         role="assistant",
@@ -106,11 +106,11 @@ def test_openai_message_conversion_preserves_assistant_tool_calls() -> None:
         ("unexpected", LLMStopReason.UNKNOWN),
     ],
 )
-def test_openai_stop_reason_mapping(provider_reason: str, expected: LLMStopReason) -> None:
+async def test_openai_stop_reason_mapping(provider_reason: str, expected: LLMStopReason) -> None:
     assert OpenAICompatibleLLMClient._normalize_stop_reason(provider_reason) == expected  # noqa: SLF001
 
 
-def test_openai_client_marks_truncated_invalid_tool_call() -> None:
+async def test_openai_client_marks_truncated_invalid_tool_call() -> None:
     tool_call = SimpleNamespace(
         id="call_1",
         function=SimpleNamespace(name="todo_write", arguments='{"action":'),
@@ -124,7 +124,7 @@ def test_openai_client_marks_truncated_invalid_tool_call() -> None:
     assert truncated
 
 
-def test_openai_client_records_bounded_invalid_tool_call_arguments() -> None:
+async def test_openai_client_records_bounded_invalid_tool_call_arguments() -> None:
     arguments = '{"action":"' + ("x" * 3_000)
     tool_call = SimpleNamespace(
         id="call_1",
@@ -144,7 +144,7 @@ def test_openai_client_records_bounded_invalid_tool_call_arguments() -> None:
     assert len(captured.value.invalid_tool_arguments_preview) == 2_000
 
 
-def test_openai_client_retries_insufficient_system_resource() -> None:
+async def test_openai_client_retries_insufficient_system_resource() -> None:
     class ResourceLimitedCompletions:
         def create(self, **kwargs):  # type: ignore[no-untyped-def]
             del kwargs
@@ -161,7 +161,7 @@ def test_openai_client_retries_insufficient_system_resource() -> None:
     client = OpenAICompatibleLLMClient(client=fake, model="deepseek-test")  # type: ignore[arg-type]
 
     with pytest.raises(LLMServiceError) as captured:
-        client.complete([AgentMessage(role="user", content="start")], [])
+        await client.complete([AgentMessage(role="user", content="start")], [])
 
     assert captured.value.kind == LLMErrorKind.OVERLOADED
     assert captured.value.retryable
@@ -181,7 +181,7 @@ def test_openai_client_retries_insufficient_system_resource() -> None:
         (422, "invalid parameters", LLMErrorKind.INVALID_REQUEST),
     ],
 )
-def test_llm_error_normalization(
+async def test_llm_error_normalization(
     status_code: int,
     message: str,
     expected: LLMErrorKind,
