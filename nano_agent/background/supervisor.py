@@ -134,6 +134,10 @@ class BackgroundJobSupervisor:
                 timeout=timeout,
             )
 
+    async def wait_for_completion_async(self, timeout: float) -> bool:
+        """Wait for a terminal Job event without blocking the caller's event loop."""
+        return await asyncio.to_thread(self.wait_for_completion, timeout)
+
     def cancel(self, job_id: str) -> BackgroundJob:
         prepared_cancel: PreparedSubagent | None = None
         with self._lock:

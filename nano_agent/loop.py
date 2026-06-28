@@ -4,6 +4,7 @@ import json
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from nano_agent.config import AgentConfig
@@ -12,12 +13,14 @@ from nano_agent.context.compactor import ContextCompactor
 from nano_agent.hooks.base import AgentHook, HookResult
 from nano_agent.models import (
     AgentMessage,
+    ApprovalLevel,
     CompletionReport,
     LLMResponse,
     LLMStopReason,
     RunStatus,
     RunSummary,
     ToolCallRecord,
+    ToolUseRequest,
 )
 from nano_agent.persistence.message_store import MessageStore
 from nano_agent.services.llm import LLMClient
@@ -29,6 +32,17 @@ from nano_agent.tools.finish_run import FinishRunTool
 
 class AgentLoopLimitError(RuntimeError):
     """Raised when a configured physical LLM call budget is exhausted."""
+
+
+@dataclass
+class _ToolExecutionOutcome:
+    """One completed tool-use protocol item ready to persist and append."""
+
+    tool_name: str  # Tool name to expose to round-level background query detection.
+    result: ToolResult  # Normalized tool execution result.
+    record: ToolCallRecord  # Durable summary record for RunSummary.tool_calls.
+    message: AgentMessage  # Protocol tool result message to append to the conversation.
+    completion_report: CompletionReport | None = None  # Valid finish_run report, if any.
 
 
 class AgentLoop:
@@ -203,136 +217,26 @@ class AgentLoop:
             )
             round_tool_results: list[tuple[str, ToolResult]] = []
             for tool_use in response.tool_uses:
-                if finalization_step and tool_use.name != FinishRunTool.name:
-                    result = ToolResult.failure(
-                        code="finalization_tool_denied",
-                        message=(
-                            "Only finish_run is available during the reserved finalization step."
-                        ),
-                    )
-                    run.tool_calls.append(
-                        ToolCallRecord(
-                            tool_call_id=tool_use.id,
-                            tool_name=tool_use.name,
-                            input_summary=json.dumps(tool_use.input, ensure_ascii=False),
-                            output_summary=result.summary,
-                            approval_level="read",  # type: ignore
-                            duration_seconds=0.0,
-                            success=False,
-                        )
-                    )
-                    self._append_messages(
-                        messages,
-                        [
-                            AgentMessage(
-                                role="tool",
-                                content=json.dumps(
-                                    result.model_dump(mode="json"),
-                                    ensure_ascii=False,
-                                ),
-                                tool_call_id=tool_use.id,
-                            )
-                        ],
-                    )
-                    round_tool_results.append((tool_use.name, result))
-                    continue
-                try:
-                    tool = self.tools.get(tool_use.name)
-                except KeyError:
-                    result = ToolResult.failure(
-                        code="tool_not_found",
-                        message=f"Tool not found: {tool_use.name}",
-                    )
-                    run.tool_calls.append(
-                        ToolCallRecord(
-                            tool_call_id=tool_use.id,
-                            tool_name=tool_use.name,
-                            input_summary=json.dumps(tool_use.input, ensure_ascii=False),
-                            output_summary=result.summary,
-                            approval_level="read",  # type: ignore
-                            duration_seconds=0.0,
-                            success=False,
-                        )
-                    )
-                    self._append_messages(
-                        messages,
-                        [
-                            AgentMessage(
-                                role="tool",
-                                content=json.dumps(
-                                    result.model_dump(mode="json"), ensure_ascii=False
-                                ),
-                                tool_call_id=tool_use.id,
-                            )
-                        ],
-                    )
-                    round_tool_results.append((tool_use.name, result))
-                    continue
-                started = time.monotonic()
-                completion_report: CompletionReport | None = None
-                try:
-                    self._raise_if_cancelled()
-                    for hook in self.hooks:
-                        self._append_hook_messages(
-                            deferred_hook_messages,
-                            await hook.before_tool_call(self.context, tool, tool_use),
-                        )
-                    result = await tool.invoke(tool_use.input, self.context)
-                    if isinstance(tool, FinishRunTool) and result.success:
-                        result, completion_report = self._validate_completion(
-                            result,
-                            finish_is_exclusive=finish_is_exclusive,
-                        )
-                    duration = time.monotonic() - started
-                    for hook in self.hooks:
-                        self._append_hook_messages(
-                            deferred_hook_messages,
-                            await hook.after_tool_call(
-                                self.context,
-                                tool,
-                                tool_use,
-                                result,
-                                duration,
-                            ),
-                        )
-                    self._raise_if_cancelled()
-                except Exception as exc:
-                    for hook in self.hooks:
-                        await hook.on_error(self.context, exc)
-                    raise
-                run.tool_calls.append(
-                    ToolCallRecord(
-                        tool_call_id=tool_use.id,
-                        tool_name=tool.name,
-                        input_summary=json.dumps(tool_use.input, ensure_ascii=False),
-                        output_summary=result.summary,
-                        approval_level=tool.approval_level,
-                        duration_seconds=duration,
-                        success=result.success,
-                    )
+                outcome = await self._execute_tool_use(
+                    tool_use,
+                    finalization_step=finalization_step,
+                    finish_is_exclusive=finish_is_exclusive,
+                    deferred_hook_messages=deferred_hook_messages,
                 )
-                round_tool_results.append((tool.name, result))
-                self._append_messages(
-                    messages,
-                    [
-                        AgentMessage(
-                            role="tool",
-                            content=json.dumps(result.model_dump(mode="json"), ensure_ascii=False),
-                            tool_call_id=tool_use.id,
-                        )
-                    ],
-                )
+                run.tool_calls.append(outcome.record)
+                round_tool_results.append((outcome.tool_name, outcome.result))
+                self._append_messages(messages, [outcome.message])
                 if (
-                    isinstance(tool, FinishRunTool)
+                    outcome.tool_name == FinishRunTool.name
                     and finish_is_exclusive
-                    and result.error_code == "background_jobs_active"
+                    and outcome.result.error_code == "background_jobs_active"
                     and self.idle_waiter is not None
                 ):
                     await self._idle_wait(messages)
-                if completion_report is not None:
+                if outcome.completion_report is not None:
                     self._append_messages(messages, deferred_hook_messages)
-                    run.completion_report = completion_report
-                    run.status = completion_report.status
+                    run.completion_report = outcome.completion_report
+                    run.status = outcome.completion_report.status
                     run.messages = messages
                     return run
 
@@ -356,6 +260,119 @@ class AgentLoop:
         run.completion_report = self._protocol_failure_report(resolution)
         run.messages = messages
         return run
+
+    async def _execute_tool_use(
+        self,
+        tool_use: ToolUseRequest,
+        *,
+        finalization_step: bool,
+        finish_is_exclusive: bool,
+        deferred_hook_messages: list[AgentMessage],
+    ) -> _ToolExecutionOutcome:
+        """Execute one tool-use request and return ordered protocol artifacts."""
+        if finalization_step and tool_use.name != FinishRunTool.name:
+            result = ToolResult.failure(
+                code="finalization_tool_denied",
+                message="Only finish_run is available during the reserved finalization step.",
+            )
+            return self._tool_failure_outcome(
+                tool_use,
+                result=result,
+                approval_level=ApprovalLevel.READ,
+            )
+        try:
+            tool = self.tools.get(tool_use.name)
+        except KeyError:
+            result = ToolResult.failure(
+                code="tool_not_found",
+                message=f"Tool not found: {tool_use.name}",
+            )
+            return self._tool_failure_outcome(
+                tool_use,
+                result=result,
+                approval_level=ApprovalLevel.READ,
+            )
+
+        started = time.monotonic()
+        completion_report: CompletionReport | None = None
+        try:
+            self._raise_if_cancelled()
+            for hook in self.hooks:
+                self._append_hook_messages(
+                    deferred_hook_messages,
+                    await hook.before_tool_call(self.context, tool, tool_use),
+                )
+            result = await tool.invoke(tool_use.input, self.context)
+            if isinstance(tool, FinishRunTool) and result.success:
+                result, completion_report = self._validate_completion(
+                    result,
+                    finish_is_exclusive=finish_is_exclusive,
+                )
+            duration = time.monotonic() - started
+            for hook in self.hooks:
+                self._append_hook_messages(
+                    deferred_hook_messages,
+                    await hook.after_tool_call(
+                        self.context,
+                        tool,
+                        tool_use,
+                        result,
+                        duration,
+                    ),
+                )
+            self._raise_if_cancelled()
+        except Exception as exc:
+            for hook in self.hooks:
+                await hook.on_error(self.context, exc)
+            raise
+
+        return _ToolExecutionOutcome(
+            tool_name=tool.name,
+            result=result,
+            record=ToolCallRecord(
+                tool_call_id=tool_use.id,
+                tool_name=tool.name,
+                input_summary=json.dumps(tool_use.input, ensure_ascii=False),
+                output_summary=result.summary,
+                approval_level=tool.approval_level,
+                duration_seconds=duration,
+                success=result.success,
+            ),
+            message=self._tool_result_message(tool_use.id, result),
+            completion_report=completion_report,
+        )
+
+    def _tool_failure_outcome(
+        self,
+        tool_use: ToolUseRequest,
+        *,
+        result: ToolResult,
+        approval_level: ApprovalLevel,
+    ) -> _ToolExecutionOutcome:
+        """Build protocol artifacts for a tool request rejected before invocation."""
+        return _ToolExecutionOutcome(
+            tool_name=tool_use.name,
+            result=result,
+            record=ToolCallRecord(
+                tool_call_id=tool_use.id,
+                tool_name=tool_use.name,
+                input_summary=json.dumps(tool_use.input, ensure_ascii=False),
+                output_summary=result.summary,
+                approval_level=approval_level,
+                duration_seconds=0.0,
+                success=False,
+            ),
+            message=self._tool_result_message(tool_use.id, result),
+        )
+
+    @staticmethod
+    def _tool_result_message(tool_call_id: str, result: ToolResult) -> AgentMessage:
+        """Convert one ToolResult into the protocol tool message."""
+        return AgentMessage(
+            role="tool",
+            content=json.dumps(result.model_dump(mode="json"), ensure_ascii=False),
+            tool_call_id=tool_call_id,
+        )
 
     async def _call_llm_with_recovery(
         self,

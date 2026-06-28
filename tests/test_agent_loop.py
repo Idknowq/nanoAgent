@@ -14,7 +14,13 @@ from nano_agent.persistence.message_store import MessageStore
 from nano_agent.services.errors import LLMErrorKind, LLMServiceError
 from nano_agent.services.llm import LLMClient
 from nano_agent.services.retry import RetryPolicy
-from nano_agent.tools.base import ToolContext, ToolRegistry, build_default_tool_registry
+from nano_agent.tools.base import (
+    RuntimeTool,
+    ToolContext,
+    ToolRegistry,
+    ToolResult,
+    build_default_tool_registry,
+)
 from nano_agent.tools.run_command import RunCommandTool
 from nano_agent.tools.todo import TodoWriteTool
 
@@ -105,6 +111,86 @@ class ReminderHook(NoOpHook):
     async def before_tool_call(self, context, tool, tool_use):  # type: ignore[no-untyped-def]
         return HookResult(
             injected_messages=[AgentMessage(role="system", content=f"Reminder for {tool_use.name}")]
+        )
+
+
+class OrderedTool(RuntimeTool):
+    """Test tool that records when the runtime invokes it."""
+
+    name = "ordered_tool"
+    description = "Record tool execution order."
+
+    def __init__(self, events: list[str]) -> None:
+        self.events = events  # Shared event log used by the protocol-order test.
+
+    async def run(self, input_data, context):  # type: ignore[no-untyped-def]
+        del input_data, context
+        self.events.append("tool_run")
+        return ToolResult(success=True, summary="ordered", data={"ok": True})
+
+
+class OrderedLLM:
+    """Test LLM that records call order and requests one tool."""
+
+    def __init__(self, events: list[str]) -> None:
+        self.events = events  # Shared event log used by the protocol-order test.
+        self.calls = 0  # Number of LLM requests observed.
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        self.events.append(f"llm_complete_{self.calls + 1}")
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="call ordered tool",
+                stop_reason="tool_use",
+                tool_uses=[
+                    ToolUseRequest(
+                        id="ordered-call",
+                        name=OrderedTool.name,
+                        input={},
+                    )
+                ],
+            )
+        return LLMResponse(content="done", stop_reason="end_turn")
+
+
+class OrderedHook(NoOpHook):
+    """Test hook that records the protocol order of loop extension points."""
+
+    def __init__(self, events: list[str]) -> None:
+        self.events = events  # Shared event log used by the protocol-order test.
+
+    async def before_llm_call(self, context, messages, tools):  # type: ignore[no-untyped-def]
+        del context, messages, tools
+        self.events.append("before_llm_call")
+
+    async def after_llm_call(self, context, response):  # type: ignore[no-untyped-def]
+        del context, response
+        self.events.append("after_llm_call")
+        return HookResult(
+            injected_messages=[AgentMessage(role="system", content="after llm")]
+        )
+
+    async def before_tool_call(self, context, tool, tool_use):  # type: ignore[no-untyped-def]
+        del context, tool, tool_use
+        self.events.append("before_tool_call")
+        return HookResult(
+            injected_messages=[AgentMessage(role="system", content="before tool")]
+        )
+
+    async def after_tool_call(  # type: ignore[no-untyped-def]
+        self,
+        context,
+        tool,
+        tool_use,
+        result,
+        duration_seconds,
+    ):
+        del context, tool, tool_use, result, duration_seconds
+        self.events.append("after_tool_call")
+        return HookResult(
+            injected_messages=[AgentMessage(role="system", content="after tool")]
         )
 
 
@@ -217,6 +303,57 @@ async def test_agent_loop_executes_tool_and_records_result(tmp_path: Path, capsy
     assert result.tool_calls[0].success
     assert any(message.role == "tool" for message in result.messages)
     assert capsys.readouterr().out == ""
+
+
+async def test_agent_loop_preserves_llm_hook_tool_protocol_order(tmp_path: Path) -> None:
+    events: list[str] = []
+    config = AgentConfig(workspace_root=tmp_path)
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
+        config=config,
+    )
+    loop = AgentLoop(
+        config=config,
+        llm=OrderedLLM(events),  # type: ignore[arg-type]
+        tools=ToolRegistry([OrderedTool(events)]),
+        context=context,
+        hooks=[OrderedHook(events)],
+    )
+
+    result = await loop.run(
+        RunSummary(run_id="test", repo_url=context.repo_url),
+        [AgentMessage(role="user", content="start")],
+    )
+
+    assert events == [
+        "before_llm_call",
+        "llm_complete_1",
+        "after_llm_call",
+        "before_tool_call",
+        "tool_run",
+        "after_tool_call",
+        "before_llm_call",
+        "llm_complete_2",
+        "after_llm_call",
+    ]
+    assert [message.role for message in result.messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "system",
+        "system",
+        "system",
+        "assistant",
+        "system",
+    ]
+    assert [message.content for message in result.messages[3:6]] == [
+        "after llm",
+        "before tool",
+        "after tool",
+    ]
 
 
 async def test_agent_loop_retries_once_after_reactive_compaction(tmp_path: Path) -> None:

@@ -159,7 +159,9 @@ class NanoAgent:
                 hooks=hooks,
                 message_store=message_store,
                 compactor=compactor,
-                idle_waiter=supervisor.wait_for_completion if supervisor is not None else None,
+                idle_waiter=(
+                    supervisor.wait_for_completion_async if supervisor is not None else None
+                ),
             )
             run = await loop.run(run=run, initial_messages=prompt_bundle.messages)
         except Exception as exc:  # noqa: BLE001 - top-level agent boundary should capture failures.

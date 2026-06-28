@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -298,6 +299,20 @@ async def test_supervisor_idle_wait_unblocks_when_any_job_completes(tmp_path: Pa
         manager.release.set()
         assert waiting.result(timeout=1)
 
+    supervisor.shutdown()
+
+
+async def test_supervisor_async_idle_wait_unblocks_when_job_completes(tmp_path: Path) -> None:
+    manager = ControlledSubagentManager()
+    supervisor = make_supervisor(tmp_path, manager)
+    supervisor.submit(make_request("inspect"))
+    manager.started.get(timeout=1)
+
+    waiting = asyncio.create_task(supervisor.wait_for_completion_async(1))
+    await asyncio.sleep(0)
+    manager.release.set()
+
+    assert await asyncio.wait_for(waiting, timeout=1)
     supervisor.shutdown()
 
 
