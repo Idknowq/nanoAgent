@@ -57,6 +57,8 @@ class ReadFileTool(RuntimeTool):
     approval_level = ApprovalLevel.READ
     category = "filesystem"
     requires_workspace = True
+    can_run_concurrently = True
+    conflict_group = "workspace_read"
     input_model = ReadFileInput
     input_schema = ReadFileInput.model_json_schema()
 

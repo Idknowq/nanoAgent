@@ -49,6 +49,9 @@ class ToolSpec(BaseModel):
     enabled: bool = True  # 工具是否默认可用。
     requires_workspace: bool = False  # 工具是否依赖当前 run 的工作区。
     is_mutating: bool = False  # 工具是否可能修改文件、环境或外部状态。
+    can_run_concurrently: bool = False  # 工具是否允许与同组安全工具并发执行。
+    conflict_group: str | None = None  # 并发冲突域；不同冲突域不放入同一批次。
+    requires_exclusive_execution: bool = False  # 工具是否必须独占当前工具批次。
 
 
 class ToolContext(BaseModel):
@@ -92,6 +95,9 @@ class RuntimeTool(ABC):
     requires_workspace: ClassVar[bool] = False  # 工具是否依赖当前工作区。
     workspace_must_exist: ClassVar[bool] = True  # 调用前工作区是否必须已存在。
     is_mutating: ClassVar[bool] = False  # 工具是否可能修改环境或外部状态。
+    can_run_concurrently: ClassVar[bool] = False  # 是否允许与同组安全工具并发执行。
+    conflict_group: ClassVar[str | None] = None  # 并发冲突域；不同冲突域不放入同一批次。
+    requires_exclusive_execution: ClassVar[bool] = False  # 是否必须独占当前工具批次。
     input_model: ClassVar[type[BaseModel] | None] = None  # 工具运行时输入校验模型。
 
     async def invoke(self, input_data: dict[str, Any], context: ToolContext) -> ToolResult:
@@ -179,6 +185,9 @@ class ToolRegistry:
                 enabled=tool.enabled,
                 requires_workspace=tool.requires_workspace,
                 is_mutating=tool.is_mutating,
+                can_run_concurrently=tool.can_run_concurrently,
+                conflict_group=tool.conflict_group,
+                requires_exclusive_execution=tool.requires_exclusive_execution,
             )
             for tool in self._tools.values()
             if tool.enabled

@@ -4,7 +4,7 @@ import json
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from nano_agent.config import AgentConfig
@@ -26,7 +26,7 @@ from nano_agent.persistence.message_store import MessageStore
 from nano_agent.services.llm import LLMClient
 from nano_agent.services.errors import LLMErrorKind, LLMServiceError, normalize_llm_error
 from nano_agent.services.retry import RetryPolicy
-from nano_agent.tools.base import ToolContext, ToolRegistry, ToolResult, ToolSpec
+from nano_agent.tools.base import RuntimeTool, ToolContext, ToolRegistry, ToolResult, ToolSpec
 from nano_agent.tools.finish_run import FinishRunTool
 
 
@@ -43,6 +43,17 @@ class _ToolExecutionOutcome:
     record: ToolCallRecord  # Durable summary record for RunSummary.tool_calls.
     message: AgentMessage  # Protocol tool result message to append to the conversation.
     completion_report: CompletionReport | None = None  # Valid finish_run report, if any.
+    hook_messages: list[AgentMessage] = field(default_factory=list)  # Deferred hook output.
+
+
+@dataclass
+class _PreparedToolInvocation:
+    """Validated concurrent tool invocation after ordered before-tool hooks."""
+
+    tool_use: ToolUseRequest  # Original LLM tool request.
+    tool: RuntimeTool  # Runtime tool instance selected from the registry.
+    started: float  # Monotonic timestamp used for duration accounting.
+    hook_messages: list[AgentMessage] = field(default_factory=list)  # Deferred hook output.
 
 
 class AgentLoop:
@@ -216,13 +227,12 @@ class AgentLoop:
                 and response.tool_uses[0].name == FinishRunTool.name
             )
             round_tool_results: list[tuple[str, ToolResult]] = []
-            for tool_use in response.tool_uses:
-                outcome = await self._execute_tool_use(
-                    tool_use,
-                    finalization_step=finalization_step,
-                    finish_is_exclusive=finish_is_exclusive,
-                    deferred_hook_messages=deferred_hook_messages,
-                )
+            outcomes = await self._execute_tool_batch(
+                response.tool_uses,
+                finalization_step=finalization_step,
+                finish_is_exclusive=finish_is_exclusive,
+            )
+            for outcome in outcomes:
                 run.tool_calls.append(outcome.record)
                 round_tool_results.append((outcome.tool_name, outcome.result))
                 self._append_messages(messages, [outcome.message])
@@ -234,7 +244,13 @@ class AgentLoop:
                 ):
                     await self._idle_wait(messages)
                 if outcome.completion_report is not None:
-                    self._append_messages(messages, deferred_hook_messages)
+                    self._append_messages(
+                        messages,
+                        [
+                            *deferred_hook_messages,
+                            *self._ordered_hook_messages(outcomes),
+                        ],
+                    )
                     run.completion_report = outcome.completion_report
                     run.status = outcome.completion_report.status
                     run.messages = messages
@@ -242,7 +258,13 @@ class AgentLoop:
 
             if self._only_active_background_queries(round_tool_results):
                 await self._idle_wait(messages)
-            self._append_messages(messages, deferred_hook_messages)
+            self._append_messages(
+                messages,
+                [
+                    *deferred_hook_messages,
+                    *self._ordered_hook_messages(outcomes),
+                ],
+            )
             run.messages = messages
 
         run.status = RunStatus.FAILED
@@ -261,13 +283,176 @@ class AgentLoop:
         run.messages = messages
         return run
 
+    async def _execute_tool_batch(
+        self,
+        tool_uses: list[ToolUseRequest],
+        *,
+        finalization_step: bool,
+        finish_is_exclusive: bool,
+    ) -> list[_ToolExecutionOutcome]:
+        """Execute one LLM tool-use batch with conservative concurrency boundaries."""
+        outcomes: list[_ToolExecutionOutcome] = []
+        concurrent_group: list[ToolUseRequest] = []
+        concurrent_group_key: str | None = None
+
+        async def flush_concurrent_group() -> None:
+            nonlocal concurrent_group, concurrent_group_key
+            if not concurrent_group:
+                return
+            outcomes.extend(
+                await self._execute_concurrent_tool_group(
+                    concurrent_group,
+                    finish_is_exclusive=finish_is_exclusive,
+                )
+            )
+            concurrent_group = []
+            concurrent_group_key = None
+
+        for tool_use in tool_uses:
+            group_key = self._concurrent_group_key(
+                tool_use,
+                finalization_step=finalization_step,
+            )
+            if group_key is None:
+                await flush_concurrent_group()
+                outcomes.append(
+                    await self._execute_tool_use(
+                        tool_use,
+                        finalization_step=finalization_step,
+                        finish_is_exclusive=finish_is_exclusive,
+                    )
+                )
+                continue
+            if concurrent_group and group_key != concurrent_group_key:
+                await flush_concurrent_group()
+            concurrent_group.append(tool_use)
+            concurrent_group_key = group_key
+
+        await flush_concurrent_group()
+        return outcomes
+
+    def _concurrent_group_key(
+        self,
+        tool_use: ToolUseRequest,
+        *,
+        finalization_step: bool,
+    ) -> str | None:
+        """Return a batch key for tools that are safe to invoke concurrently."""
+        if finalization_step and tool_use.name != FinishRunTool.name:
+            return None
+        try:
+            tool = self.tools.get(tool_use.name)
+        except KeyError:
+            return None
+        if (
+            tool.requires_exclusive_execution
+            or tool.is_mutating
+            or not tool.can_run_concurrently
+        ):
+            return None
+        return tool.conflict_group or tool.name
+
+    async def _execute_concurrent_tool_group(
+        self,
+        tool_uses: list[ToolUseRequest],
+        *,
+        finish_is_exclusive: bool,
+    ) -> list[_ToolExecutionOutcome]:
+        """Run a group of concurrency-safe tools while preserving protocol order."""
+        if len(tool_uses) == 1:
+            return [
+                await self._execute_tool_use(
+                    tool_uses[0],
+                    finalization_step=False,
+                    finish_is_exclusive=finish_is_exclusive,
+                )
+            ]
+
+        prepared: list[_PreparedToolInvocation] = []
+        try:
+            for tool_use in tool_uses:
+                tool = self.tools.get(tool_use.name)
+                self._raise_if_cancelled()
+                started = time.monotonic()
+                hook_messages: list[AgentMessage] = []
+                for hook in self.hooks:
+                    self._append_hook_messages(
+                        hook_messages,
+                        await hook.before_tool_call(self.context, tool, tool_use),
+                    )
+                prepared.append(
+                    _PreparedToolInvocation(
+                        tool_use=tool_use,
+                        tool=tool,
+                        started=started,
+                        hook_messages=hook_messages,
+                    )
+                )
+        except Exception as exc:
+            for hook in self.hooks:
+                await hook.on_error(self.context, exc)
+            raise
+
+        async def invoke(prepared_call: _PreparedToolInvocation) -> tuple[ToolResult, float]:
+            result = await prepared_call.tool.invoke(prepared_call.tool_use.input, self.context)
+            return result, time.monotonic() - prepared_call.started
+
+        tasks = [asyncio.create_task(invoke(prepared_call)) for prepared_call in prepared]
+        try:
+            results = await asyncio.gather(*tasks)
+        except Exception as exc:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for hook in self.hooks:
+                await hook.on_error(self.context, exc)
+            raise
+
+        outcomes: list[_ToolExecutionOutcome] = []
+        try:
+            for prepared_call, (result, duration) in zip(prepared, results, strict=True):
+                completion_report: CompletionReport | None = None
+                if isinstance(prepared_call.tool, FinishRunTool) and result.success:
+                    result, completion_report = self._validate_completion(
+                        result,
+                        finish_is_exclusive=finish_is_exclusive,
+                    )
+                for hook in self.hooks:
+                    self._append_hook_messages(
+                        prepared_call.hook_messages,
+                        await hook.after_tool_call(
+                            self.context,
+                            prepared_call.tool,
+                            prepared_call.tool_use,
+                            result,
+                            duration,
+                        ),
+                    )
+                self._raise_if_cancelled()
+                outcomes.append(
+                    self._tool_success_outcome(
+                        prepared_call.tool_use,
+                        prepared_call.tool,
+                        result=result,
+                        duration=duration,
+                        completion_report=completion_report,
+                        hook_messages=prepared_call.hook_messages,
+                    )
+                )
+        except Exception as exc:
+            for hook in self.hooks:
+                await hook.on_error(self.context, exc)
+            raise
+
+        return outcomes
+
     async def _execute_tool_use(
         self,
         tool_use: ToolUseRequest,
         *,
         finalization_step: bool,
         finish_is_exclusive: bool,
-        deferred_hook_messages: list[AgentMessage],
     ) -> _ToolExecutionOutcome:
         """Execute one tool-use request and return ordered protocol artifacts."""
         if finalization_step and tool_use.name != FinishRunTool.name:
@@ -294,12 +479,13 @@ class AgentLoop:
             )
 
         started = time.monotonic()
+        hook_messages: list[AgentMessage] = []
         completion_report: CompletionReport | None = None
         try:
             self._raise_if_cancelled()
             for hook in self.hooks:
                 self._append_hook_messages(
-                    deferred_hook_messages,
+                    hook_messages,
                     await hook.before_tool_call(self.context, tool, tool_use),
                 )
             result = await tool.invoke(tool_use.input, self.context)
@@ -311,7 +497,7 @@ class AgentLoop:
             duration = time.monotonic() - started
             for hook in self.hooks:
                 self._append_hook_messages(
-                    deferred_hook_messages,
+                    hook_messages,
                     await hook.after_tool_call(
                         self.context,
                         tool,
@@ -326,6 +512,26 @@ class AgentLoop:
                 await hook.on_error(self.context, exc)
             raise
 
+        return self._tool_success_outcome(
+            tool_use,
+            tool,
+            result=result,
+            duration=duration,
+            completion_report=completion_report,
+            hook_messages=hook_messages,
+        )
+
+    def _tool_success_outcome(
+        self,
+        tool_use: ToolUseRequest,
+        tool: RuntimeTool,
+        *,
+        result: ToolResult,
+        duration: float,
+        completion_report: CompletionReport | None,
+        hook_messages: list[AgentMessage],
+    ) -> _ToolExecutionOutcome:
+        """Build protocol artifacts for a tool that reached runtime invocation."""
         return _ToolExecutionOutcome(
             tool_name=tool.name,
             result=result,
@@ -340,6 +546,7 @@ class AgentLoop:
             ),
             message=self._tool_result_message(tool_use.id, result),
             completion_report=completion_report,
+            hook_messages=hook_messages,
         )
 
     def _tool_failure_outcome(
@@ -364,6 +571,14 @@ class AgentLoop:
             ),
             message=self._tool_result_message(tool_use.id, result),
         )
+
+    @staticmethod
+    def _ordered_hook_messages(outcomes: list[_ToolExecutionOutcome]) -> list[AgentMessage]:
+        """Flatten deferred hook output in LLM tool-use order."""
+        messages: list[AgentMessage] = []
+        for outcome in outcomes:
+            messages.extend(outcome.hook_messages)
+        return messages
 
     @staticmethod
     def _tool_result_message(tool_call_id: str, result: ToolResult) -> AgentMessage:

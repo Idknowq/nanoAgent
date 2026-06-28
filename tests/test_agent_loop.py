@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -129,6 +130,58 @@ class OrderedTool(RuntimeTool):
         return ToolResult(success=True, summary="ordered", data={"ok": True})
 
 
+class ConcurrentReadTool(RuntimeTool):
+    """Test read-only tool that blocks until all concurrent calls have started."""
+
+    name = "concurrent_read"
+    description = "Read-only concurrent test tool."
+    can_run_concurrently = True
+    conflict_group = "test_read"
+
+    def __init__(self, events: list[str], started: asyncio.Event, release: asyncio.Event) -> None:
+        self.events = events  # Shared event log used by concurrency tests.
+        self.started = started  # Set once the first invocation starts.
+        self.release = release  # Gate that lets all invocations complete together.
+        self.active = 0  # Number of currently running invocations.
+        self.max_active = 0  # Highest observed concurrent invocation count.
+
+    async def run(self, input_data, context):  # type: ignore[no-untyped-def]
+        del context
+        label = input_data["label"]
+        self.events.append(f"run_start_{label}")
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        self.started.set()
+        await self.release.wait()
+        self.active -= 1
+        self.events.append(f"run_end_{label}")
+        return ToolResult(success=True, summary=f"read {label}", data={"label": label})
+
+
+class SerialMutationTool(RuntimeTool):
+    """Test mutating tool that would expose accidental concurrent execution."""
+
+    name = "serial_mutation"
+    description = "Mutating serial test tool."
+    is_mutating = True
+
+    def __init__(self, events: list[str]) -> None:
+        self.events = events  # Shared event log used by concurrency tests.
+        self.active = 0  # Number of currently running invocations.
+        self.max_active = 0  # Highest observed concurrent invocation count.
+
+    async def run(self, input_data, context):  # type: ignore[no-untyped-def]
+        del context
+        label = input_data["label"]
+        self.events.append(f"mutation_start_{label}")
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        await asyncio.sleep(0)
+        self.active -= 1
+        self.events.append(f"mutation_end_{label}")
+        return ToolResult(success=True, summary=f"mutated {label}", data={"label": label})
+
+
 class OrderedLLM:
     """Test LLM that records call order and requests one tool."""
 
@@ -151,6 +204,25 @@ class OrderedLLM:
                         input={},
                     )
                 ],
+            )
+        return LLMResponse(content="done", stop_reason="end_turn")
+
+
+class MultiToolLLM:
+    """Test LLM that emits a fixed tool-use batch once."""
+
+    def __init__(self, tool_uses: list[ToolUseRequest]) -> None:
+        self.tool_uses = tool_uses  # Tool batch returned on the first LLM call.
+        self.calls = 0  # Number of complete requests observed.
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="call tools",
+                stop_reason="tool_use",
+                tool_uses=self.tool_uses,
             )
         return LLMResponse(content="done", stop_reason="end_turn")
 
@@ -353,6 +425,91 @@ async def test_agent_loop_preserves_llm_hook_tool_protocol_order(tmp_path: Path)
         "after llm",
         "before tool",
         "after tool",
+    ]
+
+
+async def test_agent_loop_runs_safe_tool_batch_concurrently_in_message_order(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+    tool = ConcurrentReadTool(events, started, release)
+    tool_uses = [
+        ToolUseRequest(id="read-a", name=tool.name, input={"label": "a"}),
+        ToolUseRequest(id="read-b", name=tool.name, input={"label": "b"}),
+    ]
+    config = AgentConfig(workspace_root=tmp_path)
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
+        config=config,
+    )
+    loop = AgentLoop(
+        config=config,
+        llm=MultiToolLLM(tool_uses),  # type: ignore[arg-type]
+        tools=ToolRegistry([tool]),
+        context=context,
+    )
+
+    task = asyncio.create_task(
+        loop.run(
+            RunSummary(run_id="test", repo_url=context.repo_url),
+            [AgentMessage(role="user", content="start")],
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    release.set()
+    result = await asyncio.wait_for(task, timeout=1)
+
+    assert tool.max_active == 2
+    assert result.status == "completed"
+    assert [record.tool_call_id for record in result.tool_calls] == ["read-a", "read-b"]
+    tool_messages = [message for message in result.messages if message.role == "tool"]
+    assert [message.tool_call_id for message in tool_messages] == ["read-a", "read-b"]
+    assert [
+        json.loads(message.content)["data"]["label"] for message in tool_messages
+    ] == ["a", "b"]
+
+
+async def test_agent_loop_keeps_mutating_tool_batch_serial(tmp_path: Path) -> None:
+    events: list[str] = []
+    tool = SerialMutationTool(events)
+    tool_uses = [
+        ToolUseRequest(id="write-a", name=tool.name, input={"label": "a"}),
+        ToolUseRequest(id="write-b", name=tool.name, input={"label": "b"}),
+    ]
+    config = AgentConfig(workspace_root=tmp_path)
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
+        config=config,
+    )
+    loop = AgentLoop(
+        config=config,
+        llm=MultiToolLLM(tool_uses),  # type: ignore[arg-type]
+        tools=ToolRegistry([tool]),
+        context=context,
+    )
+
+    result = await loop.run(
+        RunSummary(run_id="test", repo_url=context.repo_url),
+        [AgentMessage(role="user", content="start")],
+    )
+
+    assert result.status == "completed"
+    assert tool.max_active == 1
+    assert events == [
+        "mutation_start_a",
+        "mutation_end_a",
+        "mutation_start_b",
+        "mutation_end_b",
     ]
 
 

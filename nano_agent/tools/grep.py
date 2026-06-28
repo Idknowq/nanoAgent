@@ -119,6 +119,8 @@ class GrepTool(RuntimeTool):
     approval_level = ApprovalLevel.READ  # 文本搜索只读取工作区文件。
     category = "filesystem"  # 工具所属功能分类。
     requires_workspace = True  # 搜索依赖已存在的工作区。
+    can_run_concurrently = True  # 只读搜索可与同组文件读取工具并发。
+    conflict_group = "workspace_read"  # 与其他 workspace 只读工具共享并发域。
     input_model = GrepInput  # 工具输入参数校验模型。
     input_schema = GrepInput.model_json_schema()  # 暴露给 LLM 的输入结构。
 
