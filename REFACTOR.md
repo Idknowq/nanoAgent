@@ -23,10 +23,11 @@
 - Step 5：hooks 已收敛到 `HookPipeline`，`AgentLoop` 不再直接遍历 hook list，hook 错误通知和注入消息顺序集中维护。
 - Step 6：OpenAI-compatible provider 已迁移到 `AsyncOpenAI`，真实 LLM 网络调用不会阻塞 event loop。
 - Step 7A：`clone_repo` 已迁移到 `asyncio.create_subprocess_exec()`，git clone 和元数据查询不再使用同步 `subprocess.run()`。
+- Step 7B：`runtime/environment.py` 的隔离 Python 环境创建已迁移到 `asyncio.create_subprocess_exec()`，`run_command` 通过 async program resolution 触发环境准备。
 
 仍未完成：
 
-- 执行环境准备中的外部进程仍需迁移到 asyncio subprocess。
+- 剩余内置工具仍需做阻塞点审计。
 - 持久化、task service、background supervisor 仍存在同步锁或线程池模型。
 - MCP 尚未接入。
 
@@ -316,7 +317,7 @@ hooks 顺序：
 
 ## Step 7：迁移剩余内置工具和运行环境准备
 
-状态：进行中，Step 7A 已完成。
+状态：进行中，Step 7A 和 Step 7B 已完成。
 
 涉及模块：
 
@@ -333,7 +334,7 @@ hooks 顺序：
 重构内容：
 
 - `clone_repo` 使用 `asyncio.create_subprocess_exec()` 执行 git，并保留 timeout、stderr/stdout tail、工作区空目录约束和错误分类。已完成。
-- `runtime/environment.py` 中需要执行外部命令的逻辑改为 async subprocess。
+- `runtime/environment.py` 中需要执行外部命令的逻辑改为 async subprocess。已完成。
 - 对文件写入、skill 读取、task 工具和 delegate 工具进行阻塞点审计：
   - 短文件 I/O 可暂时保留同步实现。
   - 可能长时间运行的文件 I/O 或目录遍历放入 `asyncio.to_thread()`。
@@ -348,7 +349,6 @@ hooks 顺序：
 
 剩余工作：
 
-- Step 7B：迁移 `runtime/environment.py` 中的同步外部命令。
 - 审计 `edit_file`、`activate_skill`、task tools、delegate tools 和 `finish_run` 的阻塞点。
 
 ## Step 8：整理 ContextCompactor 和持久化异步边界

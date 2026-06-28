@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
-import subprocess
+import signal
 import sys
 from pathlib import Path
 
@@ -34,7 +35,25 @@ class ExecutionEnvironmentManager:
 
         self._ensure_directories()
         if program in self._PYTHON_PROGRAMS:
-            self.ensure_python_environment()
+            raise ToolExecutionError(
+                "isolated Python program resolution requires resolve_program_async"
+            )
+        resolved = shutil.which(program, path=self._system_path())
+        if resolved is None:
+            raise ToolExecutionError(f"executable was not found: {program}")
+        return Path(resolved)
+
+    async def resolve_program_async(self, program: str) -> Path:
+        """Resolve an allowlisted program without blocking on environment setup."""
+        if not self.config.execution_isolation_enabled:
+            resolved = shutil.which(program)
+            if resolved is None:
+                raise ToolExecutionError(f"executable was not found: {program}")
+            return Path(resolved)
+
+        self._ensure_directories()
+        if program in self._PYTHON_PROGRAMS:
+            await self.ensure_python_environment_async()
             resolved = self._python_program_path(program)
             if not resolved.is_file():
                 raise ToolExecutionError(
@@ -49,6 +68,14 @@ class ExecutionEnvironmentManager:
 
     def ensure_python_environment(self) -> Path:
         """Create a dedicated Python virtual environment for the current run."""
+        if self.config.execution_isolation_enabled:
+            raise ToolExecutionError(
+                "isolated Python environment setup requires ensure_python_environment_async"
+            )
+        return self.python_venv
+
+    async def ensure_python_environment_async(self) -> Path:
+        """Create a dedicated Python virtual environment for the current run."""
         ready_marker = self.python_venv / ".nano-agent-ready"
         python_path = self._python_program_path("python3")
         if ready_marker.is_file() and python_path.is_file():
@@ -59,27 +86,54 @@ class ExecutionEnvironmentManager:
         self.python_venv.parent.mkdir(parents=True, exist_ok=True)
         source_python = self.config.python_executable or Path(sys.executable)
         try:
-            subprocess.run(
-                [
-                    str(source_python),
-                    "-m",
-                    "venv",
-                    str(self.python_venv),
-                ],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+            process = await asyncio.create_subprocess_exec(
+                str(source_python),
+                "-m",
+                "venv",
+                str(self.python_venv),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
                 timeout=max(self.config.command_timeout_seconds, 30),
             )
-        except (OSError, subprocess.SubprocessError) as exc:
-            detail = getattr(exc, "stderr", None) or str(exc)
+        except TimeoutError as exc:
+            await self._terminate_process_group(process)
+            raise ToolExecutionError(
+                "failed to create isolated Python environment: "
+                f"venv command exceeded {max(self.config.command_timeout_seconds, 30)}s"
+            ) from exc
+        except OSError as exc:
+            raise ToolExecutionError(
+                f"failed to create isolated Python environment: {exc}"
+            ) from exc
+        if process.returncode != 0:
+            detail = stderr.decode("utf-8", errors="replace") or stdout.decode(
+                "utf-8",
+                errors="replace",
+            )
             raise ToolExecutionError(
                 f"failed to create isolated Python environment: {detail}"
-            ) from exc
+            )
 
         ready_marker.write_text("ready\n", encoding="utf-8")
         return self.python_venv
+
+    async def _terminate_process_group(self, process: asyncio.subprocess.Process) -> None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(process.communicate(), timeout=2)
+        except TimeoutError:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await process.communicate()
 
     def build_environment(self) -> dict[str, str]:
         """Build environment variables that redirect mutable package state into the run."""

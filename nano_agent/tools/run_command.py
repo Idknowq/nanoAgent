@@ -62,7 +62,7 @@ class RunCommandTool(RuntimeTool):
             runtime_dir=context.runtime_dir or context.run_dir / "runtime",
             config=context.config,
         )
-        resolved_program = environment_manager.resolve_program(program)
+        resolved_program = await environment_manager.resolve_program_async(program)
         argv = [program, *input_data["args"]]
         process_argv = [str(resolved_program), *input_data["args"]]
         timeout = input_data["timeout_seconds"] or context.config.command_timeout_seconds
