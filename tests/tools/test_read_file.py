@@ -1,3 +1,5 @@
+import asyncio
+import time
 from pathlib import Path
 
 from nano_agent.config import AgentConfig
@@ -24,6 +26,28 @@ async def test_read_file_reads_utf8_text(tmp_path: Path) -> None:
     assert result.data["content"] == "hello\nworld\n"
     assert result.data["path"] == "README.md"
     assert not result.data["truncated"]
+
+
+async def test_read_file_does_not_block_event_loop(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    (tmp_path / "README.md").write_text("hello\n", encoding="utf-8")
+    tool = ReadFileTool()
+    original_read_bytes = tool._read_bytes
+
+    def slow_read_bytes(*args, **kwargs):  # type: ignore[no-untyped-def]
+        time.sleep(0.15)
+        return original_read_bytes(*args, **kwargs)
+
+    monkeypatch.setattr(tool, "_read_bytes", slow_read_bytes)
+    started = time.monotonic()
+    task = asyncio.create_task(tool.invoke({"path": "README.md"}, make_context(tmp_path)))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
+    elapsed = time.monotonic() - started
+    result = await task
+
+    assert elapsed < 0.10
+    assert result.success
+    assert result.data["content"] == "hello\n"
 
 
 async def test_read_file_supports_byte_offset_and_limit(tmp_path: Path) -> None:

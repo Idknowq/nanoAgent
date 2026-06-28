@@ -1,104 +1,45 @@
-# CLAUDE.md
+# Repository Guidelines
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## 项目简介
 
-## Project
+本项目是一个轻量级 Coding Agent，用于面向真实代码仓库执行诊断、修复、验证和结果汇报。整体架构围绕 Agent loop 展开：LLM 产生工具调用，运行时执行工具并回填结果，直到提交结构化完成报告。
 
-`nanoAgent` — a lightweight AI Agent prototype for repository diagnosis and small-scope code repair. The core execution model is a Claude Code-style tool-use loop: send context to LLM, call tools on `tool_use`, inject results back, repeat until `end_turn` or `finish_run`.
+主要模块职责如下：
 
-## Architecture
+- `tools/`：定义运行时工具体系，包括文件读取、搜索、编辑、命令执行、仓库克隆、任务委派和运行结束报告等工具。
+- `tasks/`：维护持久化任务状态，支持任务创建、查询、更新、依赖关系和状态流转。
+- `context/`：负责上下文状态管理和压缩，包括工具结果持久化、消息裁剪和摘要压缩。
+- `services/`：封装 LLM 客户端、错误归一化、重试策略和 provider 注册。
+- `prompts/`：负责系统提示词、用户任务、skill 元数据和上下文信息的组装。
+- `hooks/`：提供 LLM 调用和工具执行前后的扩展点，用于审计、权限控制、指标采集和上下文注入。
+- `background/` 与 `subagents/`：支持后台子 Agent 并行执行、状态持久化、取消和结果回传。
+- `persistence/`：管理运行过程中的消息、配置、报告、摘要和其他持久化产物。
+- `skills/` 与 `memory/`：提供可按需加载的能力说明和历史偏好/经验注入。
 
-### Entry Point & Wiring
+测试位于 `tests/`，文档位于 `README.md`、`README_zh.md` 和 `docs/`。运行产物写入 `.nano/`，不得提交。
 
-`NanoAgent` (`nano_agent/agent.py`) is the top-level entry point. It creates the workspace, builds the tool registry, hook chain, subagent manager, prompt, compactor, and launches `AgentLoop`. It does NOT define the loop logic itself — it wires components together.
+## 环境
 
-### Core Loop (`nano_agent/loop.py`)
+使用项目虚拟环境中的 Python 3.13。默认所有开发、测试和脚本执行都应基于该虚拟环境。
 
-`AgentLoop.run()` is the heart of the system. Each iteration:
-1. Optionally runs `ContextCompactor.prepare()` to reduce context size before the LLM call.
-2. Calls `llm.complete(messages, tools)` with full recovery logic (`_call_llm_with_recovery`):
-   - Transient errors (rate-limit, overload, timeout, connection) → bounded exponential backoff with jitter.
-   - `max_tokens` (truncated output) → up to N continuation requests; partial tool-call JSON is never joined.
-   - `prompt_too_long` → one reactive compaction retry.
-   - `invalid_response` → one regeneration prompt; invalid tool JSON is never repaired in place.
-3. Executes any tool calls, runs hooks before/after each, validates `finish_run` protocol.
-4. Appends results to message history and continues.
+## 开发方向
 
-### Tools (`nano_agent/tools/`)
+后续开发方向是从当前同步执行模型逐步迁移到 `asyncio`。新功能应优先基于异步接口设计和实现，避免继续扩大同步调用链。
 
-`RuntimeTool` is the base class (ABC). Each tool has class-level `name`, `description`, `approval_level`, `input_schema`. Tools register via module-level `register_tool_factory()` calls; `build_default_tool_registry()` imports all built-in tool modules and constructs the registry.
+已开发功能应在保持行为兼容和测试覆盖的前提下逐步转为异步。多 Agent 的实现机制后续应从 `ThreadPoolExecutor` 线程池模型迁移到基于 `asyncio` task、异步锁和异步通知的调度模型。
 
-`ToolRegistry` supports `register()`, `replace()`, `get()`, `selected()` (subsets by name). `ToolContext` carries per-invocation state (run_id, workspace_path, current_step, LLM call metadata, etc.).
+## 代码风格
 
-Built-in tools: `clone_repo`, `list_files`, `grep`, `read_file`, `edit_file`, `run_command`, `finish_run`, `todo_write`, `activate_kill`, `delegate_task` (+ query/cancel variants), `task_create`/`task_get`/`task_list`/`task_update`.
+保持现有代码风格，优先做小范围、可验证的修改。代码应保持高内聚、低耦合和模块化，新增能力应放入职责匹配的模块中，避免把不同层级的逻辑混在同一个类或函数里。具体可参考skill:$karpathy-guidelines。
 
-### LLM Services (`nano_agent/services/`)
+使用 4 空格缩进、Python 类型标注，并遵守当前项目的命名习惯和约定。新增测试应放在与被测模块对应的位置。
 
-- `LLMClient` is a `Protocol` — any client implementing `complete(messages, tools) -> LLMResponse` works.
-- `OpenAICompatibleLLMClient` handles DeepSeek via the OpenAI SDK. Provider registration uses a module-level registry (`register_llm_provider` / `create_llm_client`).
-- `normalize_llm_error()` classifies SDK exceptions into `LLMErrorKind` enum with `retryable` property.
-- `RetryPolicy` computes exponential backoff with jitter; respects `Retry-After` headers when present.
+新增类必须包含明确的作用说明。类中的成员变量应添加简短注释，说明其用途或维护的状态。每个函数都必须有功能说明，说明该函数负责什么，不写空泛或重复代码本身的注释。
 
-### Hooks (`nano_agent/hooks/`)
+修改工具、上下文压缩、持久化、任务状态、后台调度或权限相关逻辑时，应补充有针对性的测试，并保持消息协议和运行产物的兼容性。
 
-`AgentHook` protocol with 5 callbacks: `before_llm_call`, `after_llm_call`, `before_tool_call`, `after_tool_call`, `on_error`. Hooks can inject system messages into the conversation.
+## 对话要求
 
-Default chain: `PermissionHook` → (optional) `ConsoleProgressHook` → (optional) `LLMMetricsHook` → (optional) `AuditHook`. `SkillActivationHook` is inserted at position 0 when skills are enabled.
+交流应简洁、务实，优先说明结论、依据和下一步。不要使用夸张或情绪化表达。
 
-### Context Compaction (`nano_agent/context/`)
-
-`ContextCompactor.prepare()` runs this ordered pipeline before each LLM call:
-1. **tool_result_budget** — persist the largest tool results from the latest batch to disk, replace with compact references.
-2. **snip_compact** — when estimated tokens approach context limit, drop middle messages while preserving assistant-tool protocol boundaries.
-3. **micro_compact** — replace older large tool results with a compact placeholder.
-4. **auto_compact** (LLM summary) — ask the LLM to generate a conversation summary; runs at most 3 times per run.
-5. **reactive_compact** — triggered by `prompt_too_long` error; keeps stable prefix + recent tail; runs at most once.
-
-Token estimation uses a conservative 3 chars/token ratio, not a provider tokenizer. Persisted outputs go to `.nano-agent/tool-results/` in the workspace (after clone) or `run_dir/tool-results/` (before clone).
-
-### Subagents & Background Jobs (`nano_agent/subagents/`, `nano_agent/background/`)
-
-`SubagentManager` creates isolated one-level child `AgentLoop` instances. Children receive only the delegated task + explicit context; they cannot create further subagents. They can use only a reconstructible subset of parent tools.
-
-`BackgroundJobSupervisor` wraps subagents in a `ThreadPoolExecutor` with bounded concurrency (default max 2). Jobs progress through states (queued → running → succeeded/blocked/failed/cancelled). Completion events are delivered to the parent conversation. Cancellation is cooperative at loop boundaries. The main Agent idles briefly waiting for active jobs before finishing.
-
-### Tasks (`nano_agent/tasks/`)
-
-Persistent task tracking with `PENDING → IN_PROGRESS → COMPLETED/BLOCKED/FAILED/CANCELLED` lifecycle. `blocked_by` dependencies auto-unblock when prerequisites complete. Background jobs can link to tasks and update their status automatically.
-
-### Prompt Assembly (`nano_agent/prompts/`)
-
-`PromptAssembler` builds the initial conversation from:
-1. Stable core system prompt (`templates/core.md`) — designed for provider-side prefix caching.
-2. Available skill metadata catalog (sorted, metadata only).
-3. Retrieved memory records (filtered by repo tags).
-4. User task message (formatted via `templates/repository_design.md`).
-
-The core prompt hash is saved for reproducibility. Skills are NOT loaded into the initial prompt — only metadata. The model activates skills lazily via `activate_skill`.
-
-### Skills (`nano_agent/skills/`)
-
-Built-in skills in `skills/builtin/<name>/SKILL.md` use YAML frontmatter with `name` and `description`. Built-in: `python-repository`, `node-repository`, `django-repository`, `github-actions`.
-
-### Runtime Isolation (`nano_agent/runtime/`)
-
-`ExecutionEnvironmentManager` creates per-run isolated directories (`HOME`, `TMPDIR`, pip cache, npm prefix, cargo home, GOPATH, XDG dirs). Python tools (`python`, `python3`, `pytest`, `ruff`, `pip`) resolve from a run-scoped venv created via `python -m venv`. The active nanoAgent venv is excluded from `PATH` to prevent leakage.
-
-### Run Lifecycle
-
-- Run IDs are UTC timestamps (`YYYYMMDDHHMMSS`).
-- Workspaces: `.nano/workspaces/<reponame>-<run_id>/`
-- Artifacts: `.nano/runs/<run_id>/` — contains `summary.json`, `messages.jsonl`, `prompt.json`, `report.md`, `tasks/`, `subagents/`, `tool-results/`, `transcripts/`, `compactions.jsonl`, optional `context_checkpoint.json`, `llm_calls.jsonl`, `audit.jsonl`.
-- Runs terminate via `finish_run` tool producing a `CompletionReport` (status: completed/blocked/failed, problem, root_cause, resolution, changed_files, verification_summary, remaining_risks, blockers). This renders to `report.md`.
-
-### Data Models (`nano_agent/models.py`)
-
-Central Pydantic models: `RunStatus`, `LLMStopReason`, `ApprovalLevel`, `AgentMessage`, `LLMResponse`, `LLMUsage`, `CompletionReport`, `RunSummary`, `ToolCallRecord`, `ToolUseRequest`.
-
-### Config (`nano_agent/config.py`)
-
-`AgentConfig` is a single Pydantic model with all runtime parameters. It has no file-based config — defaults are in the model field definitions, overridden via CLI flags or programmatic construction.
-
-## Testing Patterns
-
-Tests use pytest with `tmp_path` fixtures. Mock LLM clients (e.g., `OneToolUseLLM`, `ScriptedMvpLLMClient`) simulate deterministic model responses. `ScriptedMvpLLMClient` in `services/llm.py` can also be used for integration-style loop tests without API calls. Key test files mirror source module structure.
+每次开始修改文件或代码前，必须先向用户确认修改范围和意图；用户明确确认后再执行修改。

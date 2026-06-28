@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Literal
@@ -63,6 +64,10 @@ class ListFilesTool(RuntimeTool):
     input_schema = ListFilesInput.model_json_schema()
 
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+        return await asyncio.to_thread(self._run_sync, input_data, context)
+
+    def _run_sync(self, input_data: dict, context: ToolContext) -> ToolResult:
+        """List workspace files using blocking filesystem APIs."""
         requested_path = input_data["path"]
         supplied = Path(requested_path)
         if supplied.is_absolute() and supplied.resolve(strict=False) == (

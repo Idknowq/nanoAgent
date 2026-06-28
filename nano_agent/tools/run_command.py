@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
-import subprocess
 import time
 
 from pydantic import Field
@@ -69,13 +69,12 @@ class RunCommandTool(RuntimeTool):
         timeout = min(timeout, 600)
 
         try:
-            process = subprocess.Popen(
-                process_argv,
+            process = await asyncio.create_subprocess_exec(
+                *process_argv,
                 cwd=cwd,
                 env=environment_manager.build_environment(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
             )
         except FileNotFoundError as exc:
@@ -85,12 +84,17 @@ class RunCommandTool(RuntimeTool):
 
         timed_out = False
         try:
-            stdout, stderr = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout,
+            )
+        except TimeoutError:
             timed_out = True
-            stdout, stderr = self._terminate_process_group(process)
+            stdout_bytes, stderr_bytes = await self._terminate_process_group(process)
 
         duration = time.monotonic() - started
+        stdout = stdout_bytes.decode("utf-8", errors="replace")
+        stderr = stderr_bytes.decode("utf-8", errors="replace")
         stdout_tail = stdout[-context.config.stdout_tail_chars :]
         stderr_tail = stderr[-context.config.stderr_tail_chars :]
         data = {
@@ -124,22 +128,22 @@ class RunCommandTool(RuntimeTool):
             data=data,
         )
 
-    def _terminate_process_group(
+    async def _terminate_process_group(
         self,
-        process: subprocess.Popen[str],
-    ) -> tuple[str, str]:
+        process: asyncio.subprocess.Process,
+    ) -> tuple[bytes, bytes]:
         try:
             os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
         try:
-            return process.communicate(timeout=2)
-        except subprocess.TimeoutExpired:
+            return await asyncio.wait_for(process.communicate(), timeout=2)
+        except TimeoutError:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            return process.communicate()
+            return await process.communicate()
 
 
 def _build_run_command_tool(context: ToolContext) -> RunCommandTool:

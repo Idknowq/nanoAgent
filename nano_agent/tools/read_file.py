@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from pydantic import Field, model_validator
 
 from nano_agent.models import ApprovalLevel
@@ -63,6 +65,10 @@ class ReadFileTool(RuntimeTool):
     input_schema = ReadFileInput.model_json_schema()
 
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+        return await asyncio.to_thread(self._run_sync, input_data, context)
+
+    def _run_sync(self, input_data: dict, context: ToolContext) -> ToolResult:
+        """Read the requested file segment using blocking filesystem APIs."""
         try:
             path = resolve_workspace_path(
                 context.workspace_path,

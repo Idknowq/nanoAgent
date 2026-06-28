@@ -1,4 +1,6 @@
+import asyncio
 import json
+import time
 from pathlib import Path
 
 from nano_agent.config import AgentConfig
@@ -219,6 +221,34 @@ async def test_run_command_truncates_output_tails(tmp_path: Path) -> None:
 
     assert result.data["stdout_tail"] == "efgh\n"
     assert result.data["stderr_tail"] == "678\n"
+
+
+async def test_run_command_wait_does_not_block_event_loop(tmp_path: Path) -> None:
+    context = make_context(tmp_path)
+    warmup = await RunCommandTool().invoke(
+        {"program": "python3", "args": ["-c", "print('ready')"]},
+        context,
+    )
+    assert warmup.success
+
+    started = time.monotonic()
+    task = asyncio.create_task(
+        RunCommandTool().invoke(
+            {
+                "program": "python3",
+                "args": ["-c", "import time; time.sleep(0.2); print('done')"],
+            },
+            context,
+        )
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
+    elapsed = time.monotonic() - started
+    result = await task
+
+    assert elapsed < 0.15
+    assert result.success
+    assert result.data["stdout_tail"] == "done\n"
 
 
 async def test_run_command_terminates_timed_out_process(tmp_path: Path) -> None:

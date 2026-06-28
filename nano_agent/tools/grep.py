@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import os
 import re
@@ -125,6 +126,10 @@ class GrepTool(RuntimeTool):
     input_schema = GrepInput.model_json_schema()  # 暴露给 LLM 的输入结构。
 
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+        return await asyncio.to_thread(self._run_sync, input_data, context)
+
+    def _run_sync(self, input_data: dict, context: ToolContext) -> ToolResult:
+        """Search workspace files using blocking filesystem APIs."""
         try:
             root = resolve_workspace_path(
                 context.workspace_path,
