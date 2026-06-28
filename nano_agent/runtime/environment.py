@@ -95,19 +95,21 @@ class ExecutionEnvironmentManager:
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
             )
+        except OSError as exc:
+            raise ToolExecutionError(
+                f"failed to create isolated Python environment: {exc}"
+            ) from exc
+        timeout = max(self.config.command_timeout_seconds, 30)
+        try:
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(),
-                timeout=max(self.config.command_timeout_seconds, 30),
+                timeout=timeout,
             )
         except TimeoutError as exc:
             await self._terminate_process_group(process)
             raise ToolExecutionError(
                 "failed to create isolated Python environment: "
-                f"venv command exceeded {max(self.config.command_timeout_seconds, 30)}s"
-            ) from exc
-        except OSError as exc:
-            raise ToolExecutionError(
-                f"failed to create isolated Python environment: {exc}"
+                f"venv command exceeded {timeout}s"
             ) from exc
         if process.returncode != 0:
             detail = stderr.decode("utf-8", errors="replace") or stdout.decode(

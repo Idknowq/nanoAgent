@@ -1,4 +1,6 @@
+import asyncio
 import json
+import time
 from pathlib import Path
 
 from nano_agent.config import AgentConfig
@@ -376,6 +378,60 @@ async def test_prepare_compacts_history_and_persists_transcript(tmp_path: Path) 
     )
     assert record["compaction_type"] == "auto"
     assert record["success"] is True
+
+
+async def test_prepare_tool_result_budget_does_not_block_event_loop(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    config = AgentConfig()
+    compactor, _, _ = build_compactor(tmp_path, config)
+    messages = [AgentMessage(role="user", content="task")]
+
+    def slow_tool_result_budget(input_messages):  # type: ignore[no-untyped-def]
+        time.sleep(0.15)
+        return list(input_messages)
+
+    monkeypatch.setattr(compactor, "tool_result_budget", slow_tool_result_budget)
+
+    task = asyncio.create_task(compactor.prepare(messages, []))
+    await asyncio.sleep(0)
+    start = time.perf_counter()
+    await asyncio.sleep(0.01)
+    elapsed = time.perf_counter() - start
+    await task
+
+    assert elapsed < 0.1
+
+
+async def test_compact_history_transcript_write_does_not_block_event_loop(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    config = AgentConfig()
+    compactor, _, store = build_compactor(tmp_path, config)
+    messages = [
+        AgentMessage(role="system", content="core"),
+        AgentMessage(role="user", content="task"),
+        AgentMessage(role="assistant", content="analysis"),
+    ]
+    store.append_many(messages)
+    original_write_transcript = compactor.store.write_transcript
+
+    def slow_write_transcript(*args, **kwargs):  # type: ignore[no-untyped-def]
+        time.sleep(0.15)
+        return original_write_transcript(*args, **kwargs)
+
+    monkeypatch.setattr(compactor.store, "write_transcript", slow_write_transcript)
+
+    task = asyncio.create_task(compactor.compact_history(messages, []))
+    await asyncio.sleep(0)
+    start = time.perf_counter()
+    await asyncio.sleep(0.01)
+    elapsed = time.perf_counter() - start
+    await task
+
+    assert elapsed < 0.1
 
 
 async def test_reactive_compact_keeps_prefix_and_recent_messages(tmp_path: Path) -> None:

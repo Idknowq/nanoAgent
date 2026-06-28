@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -167,6 +168,22 @@ class CompactionStore:
             os.fsync(file.fileno())
         return target
 
+    async def write_transcript_async(
+        self,
+        messages: list[AgentMessage],
+        *,
+        compaction_type: Literal["auto", "reactive"],
+        attempt: int,
+    ) -> Path:
+        """Persist a transcript without blocking the event loop."""
+
+        return await asyncio.to_thread(
+            self.write_transcript,
+            messages,
+            compaction_type=compaction_type,
+            attempt=attempt,
+        )
+
     def save_checkpoint(self, messages: list[AgentMessage]) -> Path:
         target = self.run_dir / "context_checkpoint.json"
         atomic_write_json(
@@ -179,6 +196,11 @@ class CompactionStore:
             },
         )
         return target
+
+    async def save_checkpoint_async(self, messages: list[AgentMessage]) -> Path:
+        """Persist the active context checkpoint without blocking the event loop."""
+
+        return await asyncio.to_thread(self.save_checkpoint, messages)
 
     def append_record(self, record: CompactionRecord) -> None:
         target = self.run_dir / "compactions.jsonl"
@@ -219,7 +241,7 @@ class ContextCompactor:
     ) -> list[AgentMessage]:
         if not self.config.context_compaction_enabled:
             return messages
-        prepared = self.tool_result_budget(messages)
+        prepared = await asyncio.to_thread(self.tool_result_budget, messages)
         prepared = self.snip_compact(prepared, tools)
         prepared = self.micro_compact(prepared)
         while (
@@ -233,7 +255,7 @@ class ContextCompactor:
                 prepared = compacted
                 break
             prepared = compacted
-        self.store.save_checkpoint(prepared)
+        await self.store.save_checkpoint_async(prepared)
         return prepared
 
     def tool_result_budget(self, messages: list[AgentMessage]) -> list[AgentMessage]:
@@ -343,7 +365,7 @@ class ContextCompactor:
     ) -> list[AgentMessage]:
         self.auto_compact_attempts += 1
         before = self.estimator.estimate(messages, tools)
-        transcript = self.store.write_transcript(
+        transcript = await self.store.write_transcript_async(
             messages,
             compaction_type="auto",
             attempt=self.auto_compact_attempts,
@@ -389,7 +411,7 @@ class ContextCompactor:
             )
         self.reactive_compact_attempts += 1
         before = self.estimator.estimate(messages, tools)
-        transcript = self.store.write_transcript(
+        transcript = await self.store.write_transcript_async(
             messages,
             compaction_type="reactive",
             attempt=self.reactive_compact_attempts,
@@ -419,7 +441,7 @@ class ContextCompactor:
                 error_message=None if after < before else "reactive compact did not reduce size",
             )
         )
-        self.store.save_checkpoint(compacted)
+        await self.store.save_checkpoint_async(compacted)
         return CompactionOutcome(
             messages=compacted,
             before_estimated_tokens=before,

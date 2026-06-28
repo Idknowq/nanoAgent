@@ -23,8 +23,9 @@
 - Step 5：hooks 已收敛到 `HookPipeline`，`AgentLoop` 不再直接遍历 hook list，hook 错误通知和注入消息顺序集中维护。
 - Step 6：OpenAI-compatible provider 已迁移到 `AsyncOpenAI`，真实 LLM 网络调用不会阻塞 event loop。
 - Step 7A：`clone_repo` 已迁移到 `asyncio.create_subprocess_exec()`，git clone 和元数据查询不再使用同步 `subprocess.run()`。
-- Step 7B：`runtime/environment.py` 的隔离 Python 环境创建已迁移到 `asyncio.create_subprocess_exec()`，`run_command` 通过 async program resolution 触发环境准备。
+- Step 7B：`runtime/environment.py` 的隔离 Python 环境创建已迁移到 `asyncio.create_subprocess_exec()`，`run_command` 通过 async program resolution 触发环境准备；进程创建和等待超时处理已拆分为明确边界。
 - Step 7C：`edit_file` 和 `activate_skill` 的阻塞文件 I/O 已通过 `asyncio.to_thread()` 移出 event loop；task/delegate 状态操作留到对应 service/supervisor async 化步骤。
+- Step 8：`ContextCompactor` 的大 tool result 处理、transcript 写入和 checkpoint 写入已建立 async 边界；压缩管线仍严格串行。
 
 仍未完成：
 
@@ -111,13 +112,10 @@ hooks 顺序：
 
 当前剩余需要重构的同步边界：
 
-- `nano_agent/loop.py`：hook 调用逻辑仍分散在 loop 内，缺少统一 pipeline。
-- `nano_agent/services/openai_compatible.py`：需要迁移或确认使用异步 OpenAI-compatible client。
-- `nano_agent/tools/clone_repo.py`：使用 `subprocess.run`。
-- `nano_agent/runtime/environment.py`：执行环境准备中存在同步子进程调用。
 - `nano_agent/background/supervisor.py`：使用 `ThreadPoolExecutor`、`RLock` 和 `Condition`。
 - `nano_agent/background/store.py` 与 `nano_agent/tasks/service.py`：使用线程锁保护状态。
-- `nano_agent/persistence/` 与 compactor 持久化路径：仍以同步文件写入为主，需要明确 async 边界，同时保持原子写语义。
+- `nano_agent/tasks/store.py`：Task 快照和事件日志仍使用同步文件 I/O。
+- `nano_agent/persistence/message_store.py`、summary/report/prompt/config store：仍以同步文件写入为主，需要按调用路径建立 async 边界。
 
 ## 迁移原则
 
@@ -346,13 +344,13 @@ hooks 顺序：
 - 工具权限、workspace containment、输入校验和 `ToolResult` 格式不变。
 - 为 task service 和 background supervisor 的 async 化清理工具层依赖。
 
-## Step 8：整理 ContextCompactor 和持久化异步边界
+## Step 8：整理 ContextCompactor 大文件 I/O 异步边界
+
+状态：已完成。
 
 涉及模块：
 
 - `nano_agent/context/compactor.py`
-- `nano_agent/context/state.py`
-- `nano_agent/persistence/message_store.py`
 - `tests/test_context_compactor.py`
 
 重构内容：
@@ -364,11 +362,14 @@ hooks 顺序：
   - `micro_compact`
   - zero or more `compact_history`
   - save checkpoint
+- `prepare()` 中的 `tool_result_budget()` 通过 `asyncio.to_thread()` 执行，避免大 tool result hash、replacement 生成和落盘阻塞 event loop。
 - `_summarize()` 调用异步 LLM client。
 - `compact_history` attempts 串行执行。
 - `reactive_compact` 只从 LLM prompt-too-long recovery 路径调用。
-- transcript、checkpoint、tool result 持久化继续保持原子写。
-- 如将同步持久化移出 event loop，必须保留临时文件加 `os.replace` 的原子模式。
+- transcript 和 checkpoint 写入通过 `CompactionStore` 的 async wrapper 移出 event loop。
+- transcript、checkpoint、tool result 持久化继续保持原子写，不改变产物格式。
+- `append_record()` 暂不迁移；它只追加小型 compaction record，统一持久化迁移留到后续步骤。
+- `MessageStore`、`TaskService`、`BackgroundStore` 暂不在本步重构，避免把状态锁和事件通知问题混入 compactor 边界整理。
 - 不允许为了 async 化降低 tool result 落盘的完整性校验和恢复语义。
 
 重构后的结果：
@@ -376,34 +377,38 @@ hooks 顺序：
 - 上下文压缩可以在 async AgentLoop 中顺序执行。
 - 三层压缩和 LLM 摘要压缩不会被错误并发。
 - prompt-too-long 恢复路径保持当前语义。
-- 持久化阻塞点有明确边界，后续可统一迁移。
+- compactor 中较重的文件 I/O 不再阻塞 event loop。
+- task/background 相关持久化仍留给 Step 9 和 Step 10 结合状态服务一起迁移。
 
 ## Step 9：迁移持久化和 TaskService
+
+状态：未开始。
 
 涉及模块：
 
 - `nano_agent/tasks/service.py`
 - `nano_agent/tasks/store.py`
-- `nano_agent/background/store.py`
-- `nano_agent/persistence/json_io.py`
 - `nano_agent/persistence/message_store.py`
-- `nano_agent/persistence/report_store.py`
 - `tests/test_tasks.py`
 - `tests/test_persistence.py`
+- `tests/tools/test_tasks.py` 或现有 task tool 测试
 
 重构内容：
 
-- 将 task service API 改为 async。
-- 将 `RLock` 替换为 `asyncio.Lock`。
-- task DAG 校验、状态转换、依赖解锁必须在同一把 async lock 下完成。
-- store 写入继续保持原子性。
-- message append、summary save、report save 等持久化方法按调用路径改为 async。
+- 将 `TaskService.create/get/list/update` 改为 async，删除生产路径对同步 task service 方法的依赖。
+- 将 `TaskService` 的 `RLock` 替换为 `asyncio.Lock`。
+- task DAG 校验、状态转换、依赖解锁必须在同一把 async lock 下完成，避免并发 task tool 调用生成重复 id 或破坏依赖状态。
+- `TaskStore` 保持文件格式不变，新增 async 方法或将文件 I/O 通过 `asyncio.to_thread()` 包在 service 边界内；不重写 JSON 原子写实现。
+- 更新 `TaskCreateTool`、`TaskGetTool`、`TaskListTool`、`TaskUpdateTool` 为 await task service。
+- `MessageStore` 本步只处理 AgentLoop 主路径需要的 async append/load 边界，不重构 summary/report/prompt/config store。
+- `BackgroundJobSupervisor` 中 task service 调用可以在 Step 9 先改为 async helper 或保留到 Step 10 一并迁移；不在本步替换 `ThreadPoolExecutor`。
 
 重构后的结果：
 
-- task 和持久化层可以被 async supervisor、async tools 和 async AgentLoop 调用。
-- 不再依赖线程锁。
-- DAG 依赖和状态机语义保持不变。
+- task service 可以被 async tools 和后续 async supervisor 调用。
+- task DAG 和状态机语义保持不变。
+- task 状态更新不再依赖线程锁。
+- AgentLoop 的 message append 路径有明确 async 边界。
 
 ## Step 10：多 Agent 调度迁移到 asyncio
 
