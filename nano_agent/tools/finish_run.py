@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import inspect
+from collections.abc import Awaitable, Callable
 
 from pydantic import Field
 
@@ -38,12 +39,19 @@ class FinishRunTool(RuntimeTool):
     input_model = FinishRunInput
     input_schema = FinishRunInput.model_json_schema()
 
-    def __init__(self, active_jobs_provider: Callable[[], bool] | None = None) -> None:
+    def __init__(
+        self,
+        active_jobs_provider: Callable[[], bool | Awaitable[bool]] | None = None,
+    ) -> None:
         self.active_jobs_provider = active_jobs_provider  # 查询当前主运行是否仍有后台 Job。
 
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         del context
-        if self.active_jobs_provider is not None and self.active_jobs_provider():
+        active_jobs = False
+        if self.active_jobs_provider is not None:
+            result = self.active_jobs_provider()
+            active_jobs = await result if inspect.isawaitable(result) else result
+        if active_jobs:
             return ToolResult.failure(
                 code="background_jobs_active",
                 message=(

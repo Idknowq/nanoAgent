@@ -356,6 +356,40 @@ async def test_subagent_id_survives_manager_recreation(tmp_path: Path) -> None:
     assert Path(second.run_dir).is_dir()
 
 
+async def test_concurrent_subagents_keep_independent_runtime_state(tmp_path: Path) -> None:
+    manager, _ = make_manager(tmp_path, SuccessfulSubagentLLM())
+
+    first, second = await asyncio.gather(
+        manager.run(
+            SubagentRequest(
+                task="Inspect authentication.",
+                max_steps=3,
+                max_llm_calls=3,
+            )
+        ),
+        manager.run(
+            SubagentRequest(
+                task="Inspect billing.",
+                max_steps=3,
+                max_llm_calls=3,
+            )
+        ),
+    )
+
+    first_dir = Path(first.run_dir)
+    second_dir = Path(second.run_dir)
+    first_messages = (first_dir / "messages.jsonl").read_text(encoding="utf-8")
+    second_messages = (second_dir / "messages.jsonl").read_text(encoding="utf-8")
+
+    assert first_dir != second_dir
+    assert (first_dir / "context_checkpoint.json").is_file()
+    assert (second_dir / "context_checkpoint.json").is_file()
+    assert "Inspect authentication." in first_messages
+    assert "Inspect billing." not in first_messages
+    assert "Inspect billing." in second_messages
+    assert "Inspect authentication." not in second_messages
+
+
 async def test_blocked_subagent_preserves_blocked_status(tmp_path: Path) -> None:
     manager, _ = make_manager(tmp_path, BlockedSubagentLLM())
 

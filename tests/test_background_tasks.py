@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import json
 import asyncio
+import json
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from queue import Empty, Queue
-from threading import Event, Lock
 
 from nano_agent.background.cancellation import CancellationToken
 from nano_agent.background.hook import BackgroundCompletionHook
@@ -40,9 +37,8 @@ class ControlledSubagentManager:
     """Deterministic concurrent manager used to test Supervisor behavior."""
 
     def __init__(self) -> None:
-        self.release = Event()  # 允许测试控制所有运行中子 Agent 的完成时机。
-        self.started: Queue[str] = Queue()  # 记录实际开始执行的子 Agent。
-        self._lock = Lock()  # 串行化测试计数器。
+        self.release = asyncio.Event()  # 允许测试控制所有运行中子 Agent 的完成时机。
+        self.started: asyncio.Queue[str] = asyncio.Queue()  # 记录实际开始执行的子 Agent。
         self._next_id = 0  # 下一个测试子 Agent 数字序号。
         self._active = 0  # 当前正在执行的测试子 Agent 数量。
         self.max_active = 0  # 测试期间观察到的最大并发数。
@@ -51,9 +47,8 @@ class ControlledSubagentManager:
         del request
 
     def prepare(self, request: SubagentRequest) -> PreparedSubagent:
-        with self._lock:
-            self._next_id += 1
-            subagent_id = f"subagent-{self._next_id}"
+        self._next_id += 1
+        subagent_id = f"subagent-{self._next_id}"
         state = SubagentState(
             subagent_id=subagent_id,
             parent_run_id="parent",
@@ -77,12 +72,16 @@ class ControlledSubagentManager:
         prepared: PreparedSubagent,
         cancellation_token: CancellationToken | None = None,
     ) -> SubagentResult:
-        with self._lock:
-            self._active += 1
-            self.max_active = max(self.max_active, self._active)
-        self.started.put(prepared.state.subagent_id)
+        self._active += 1
+        self.max_active = max(self.max_active, self._active)
+        await self.started.put(prepared.state.subagent_id)
         try:
-            while not self.release.wait(0.01):
+            while True:
+                try:
+                    await asyncio.wait_for(self.release.wait(), timeout=0.01)
+                    break
+                except TimeoutError:
+                    pass
                 if cancellation_token is not None and cancellation_token.cancelled:
                     return self._cancelled_result(prepared)
             if cancellation_token is not None and cancellation_token.cancelled:
@@ -103,8 +102,7 @@ class ControlledSubagentManager:
                 run_dir=prepared.run_dir,
             )
         finally:
-            with self._lock:
-                self._active -= 1
+            self._active -= 1
 
     def cancel(self, prepared: PreparedSubagent) -> SubagentResult:
         return self._cancelled_result(prepared)
@@ -147,14 +145,14 @@ def make_supervisor(
     )
 
 
-def wait_terminal(
+async def wait_terminal(
     supervisor: BackgroundJobSupervisor,
     job_id: str,
     timeout: float = 1,
 ):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        job = supervisor.get(job_id)
+        job = await supervisor.get(job_id)
         if job.status in {
             BackgroundJobStatus.SUCCEEDED,
             BackgroundJobStatus.BLOCKED,
@@ -162,47 +160,50 @@ def wait_terminal(
             BackgroundJobStatus.CANCELLED,
         }:
             return job
-        time.sleep(0.005)
+        await asyncio.sleep(0.005)
     raise AssertionError(f"job did not finish: {job_id}")
 
 
 async def test_supervisor_runs_jobs_concurrently_with_worker_limit(tmp_path: Path) -> None:
     manager = ControlledSubagentManager()
     supervisor = make_supervisor(tmp_path, manager, max_workers=2)
-    first = supervisor.submit(make_request("first"))
-    second = supervisor.submit(make_request("second"))
+    first = await supervisor.submit(make_request("first"))
+    second = await supervisor.submit(make_request("second"))
 
-    assert {manager.started.get(timeout=1), manager.started.get(timeout=1)} == {
+    assert {
+        await asyncio.wait_for(manager.started.get(), timeout=1),
+        await asyncio.wait_for(manager.started.get(), timeout=1),
+    } == {
         first.subagent_id,
         second.subagent_id,
     }
     assert manager.max_active == 2
 
     manager.release.set()
-    assert wait_terminal(supervisor, first.job_id).status == BackgroundJobStatus.SUCCEEDED
-    assert wait_terminal(supervisor, second.job_id).status == BackgroundJobStatus.SUCCEEDED
-    supervisor.shutdown()
+    assert (await wait_terminal(supervisor, first.job_id)).status == BackgroundJobStatus.SUCCEEDED
+    assert (await wait_terminal(supervisor, second.job_id)).status == BackgroundJobStatus.SUCCEEDED
+    await supervisor.shutdown()
 
 
 async def test_supervisor_keeps_excess_job_queued(tmp_path: Path) -> None:
     manager = ControlledSubagentManager()
     supervisor = make_supervisor(tmp_path, manager, max_workers=1)
-    first = supervisor.submit(make_request("first"))
-    second = supervisor.submit(make_request("second"))
+    first = await supervisor.submit(make_request("first"))
+    second = await supervisor.submit(make_request("second"))
 
-    assert manager.started.get(timeout=1) == first.subagent_id
+    assert await asyncio.wait_for(manager.started.get(), timeout=1) == first.subagent_id
     try:
-        manager.started.get(timeout=0.05)
+        await asyncio.wait_for(manager.started.get(), timeout=0.05)
         second_started = True
-    except Empty:
+    except TimeoutError:
         second_started = False
     assert not second_started
-    assert supervisor.get(second.job_id).status == BackgroundJobStatus.QUEUED
+    assert (await supervisor.get(second.job_id)).status == BackgroundJobStatus.QUEUED
 
     manager.release.set()
-    wait_terminal(supervisor, first.job_id)
-    wait_terminal(supervisor, second.job_id)
-    supervisor.shutdown()
+    await wait_terminal(supervisor, first.job_id)
+    await wait_terminal(supervisor, second.job_id)
+    await supervisor.shutdown()
 
 
 async def test_concurrent_submissions_receive_unique_job_ids(tmp_path: Path) -> None:
@@ -210,70 +211,71 @@ async def test_concurrent_submissions_receive_unique_job_ids(tmp_path: Path) -> 
     manager.release.set()
     supervisor = make_supervisor(tmp_path, manager, max_workers=4, max_jobs=20)
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        jobs = list(executor.map(lambda index: supervisor.submit(make_request(str(index))), range(12)))
+    jobs = await asyncio.gather(
+        *[supervisor.submit(make_request(str(index))) for index in range(12)]
+    )
 
     assert len({job.job_id for job in jobs}) == 12
     assert len({job.subagent_id for job in jobs}) == 12
     for job in jobs:
-        wait_terminal(supervisor, job.job_id)
-    supervisor.shutdown()
+        await wait_terminal(supervisor, job.job_id)
+    await supervisor.shutdown()
 
 
 async def test_queued_and_running_jobs_can_be_cancelled(tmp_path: Path) -> None:
     manager = ControlledSubagentManager()
     supervisor = make_supervisor(tmp_path, manager, max_workers=1)
-    running = supervisor.submit(make_request("running"))
-    manager.started.get(timeout=1)
-    queued = supervisor.submit(make_request("queued"))
+    running = await supervisor.submit(make_request("running"))
+    await asyncio.wait_for(manager.started.get(), timeout=1)
+    queued = await supervisor.submit(make_request("queued"))
 
-    assert supervisor.cancel(queued.job_id).status == BackgroundJobStatus.CANCELLED
-    running_status = supervisor.cancel(running.job_id).status
+    assert (await supervisor.cancel(queued.job_id)).status == BackgroundJobStatus.CANCELLED
+    running_status = (await supervisor.cancel(running.job_id)).status
     assert running_status in {
         BackgroundJobStatus.CANCEL_REQUESTED,
         BackgroundJobStatus.CANCELLED,
     }
-    assert wait_terminal(supervisor, running.job_id).status == BackgroundJobStatus.CANCELLED
-    supervisor.shutdown()
+    assert (await wait_terminal(supervisor, running.job_id)).status == BackgroundJobStatus.CANCELLED
+    await supervisor.shutdown()
 
 
 async def test_job_completion_updates_linked_task(tmp_path: Path) -> None:
     task_service = TaskService(TaskStore(tmp_path / "run"))
-    task = task_service.create_sync(subject="Inspect", description="Inspect files")
+    task = await task_service.create(subject="Inspect", description="Inspect files")
     manager = ControlledSubagentManager()
     manager.release.set()
     supervisor = make_supervisor(tmp_path, manager, task_service=task_service)
 
-    job = supervisor.submit(make_request("inspect"), task_id=task.task_id)
-    assert wait_terminal(supervisor, job.job_id).status == BackgroundJobStatus.SUCCEEDED
+    job = await supervisor.submit(make_request("inspect"), task_id=task.task_id)
+    assert (await wait_terminal(supervisor, job.job_id)).status == BackgroundJobStatus.SUCCEEDED
 
-    completed = task_service.get_sync(task.task_id)
+    completed = await task_service.get(task.task_id)
     assert completed.status == TaskStatus.COMPLETED
     assert completed.owner == job.job_id
     assert completed.result == "completed inspect"
-    supervisor.shutdown()
+    await supervisor.shutdown()
 
 
 async def test_cancelled_execution_returns_linked_task_to_pending(tmp_path: Path) -> None:
     task_service = TaskService(TaskStore(tmp_path / "run"))
-    task = task_service.create_sync(subject="Inspect", description="Inspect files")
+    task = await task_service.create(subject="Inspect", description="Inspect files")
     manager = ControlledSubagentManager()
     supervisor = make_supervisor(tmp_path, manager, task_service=task_service)
 
-    job = supervisor.submit(make_request("inspect"), task_id=task.task_id)
-    manager.started.get(timeout=1)
-    supervisor.cancel(job.job_id)
-    assert wait_terminal(supervisor, job.job_id).status == BackgroundJobStatus.CANCELLED
-    assert task_service.get_sync(task.task_id).status == TaskStatus.PENDING
-    supervisor.shutdown()
+    job = await supervisor.submit(make_request("inspect"), task_id=task.task_id)
+    await asyncio.wait_for(manager.started.get(), timeout=1)
+    await supervisor.cancel(job.job_id)
+    assert (await wait_terminal(supervisor, job.job_id)).status == BackgroundJobStatus.CANCELLED
+    assert (await task_service.get(task.task_id)).status == TaskStatus.PENDING
+    await supervisor.shutdown()
 
 
 async def test_completion_hook_delivers_terminal_event_once(tmp_path: Path) -> None:
     manager = ControlledSubagentManager()
     manager.release.set()
     supervisor = make_supervisor(tmp_path, manager)
-    job = supervisor.submit(make_request("inspect"))
-    wait_terminal(supervisor, job.job_id)
+    job = await supervisor.submit(make_request("inspect"))
+    await wait_terminal(supervisor, job.job_id)
     hook = BackgroundCompletionHook(supervisor)
 
     first = await hook.before_llm_call(None, [], [])  # type: ignore[arg-type]
@@ -285,35 +287,21 @@ async def test_completion_hook_delivers_terminal_event_once(tmp_path: Path) -> N
     assert "One material risk." in first.injected_messages[0].content
     assert "run_dir" not in first.injected_messages[0].content
     assert second is None
-    supervisor.shutdown()
+    await supervisor.shutdown()
 
 
 async def test_supervisor_idle_wait_unblocks_when_any_job_completes(tmp_path: Path) -> None:
     manager = ControlledSubagentManager()
     supervisor = make_supervisor(tmp_path, manager)
-    supervisor.submit(make_request("inspect"))
-    manager.started.get(timeout=1)
+    await supervisor.submit(make_request("inspect"))
+    await asyncio.wait_for(manager.started.get(), timeout=1)
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        waiting = executor.submit(supervisor.wait_for_completion, 1)
-        manager.release.set()
-        assert waiting.result(timeout=1)
-
-    supervisor.shutdown()
-
-
-async def test_supervisor_async_idle_wait_unblocks_when_job_completes(tmp_path: Path) -> None:
-    manager = ControlledSubagentManager()
-    supervisor = make_supervisor(tmp_path, manager)
-    supervisor.submit(make_request("inspect"))
-    manager.started.get(timeout=1)
-
-    waiting = asyncio.create_task(supervisor.wait_for_completion_async(1))
+    waiting = asyncio.create_task(supervisor.wait_for_completion(1))
     await asyncio.sleep(0)
     manager.release.set()
 
     assert await asyncio.wait_for(waiting, timeout=1)
-    supervisor.shutdown()
+    await supervisor.shutdown()
 
 
 async def test_querying_terminal_job_suppresses_duplicate_completion_notice(
@@ -322,14 +310,14 @@ async def test_querying_terminal_job_suppresses_duplicate_completion_notice(
     manager = ControlledSubagentManager()
     manager.release.set()
     supervisor = make_supervisor(tmp_path, manager)
-    job = supervisor.submit(make_request("inspect"))
-    wait_terminal(supervisor, job.job_id)
-    supervisor.get(job.job_id, observe=True)
+    job = await supervisor.submit(make_request("inspect"))
+    await wait_terminal(supervisor, job.job_id)
+    await supervisor.get(job.job_id, observe=True)
 
     result = await BackgroundCompletionHook(supervisor).before_llm_call(None, [], [])  # type: ignore[arg-type]
 
     assert result is None
-    supervisor.shutdown()
+    await supervisor.shutdown()
 
 
 async def test_finish_run_rejects_active_background_jobs(tmp_path: Path) -> None:
@@ -381,7 +369,7 @@ async def test_delegation_tools_submit_query_and_list_background_job(
         context,
     )
     job_id = submitted.data["background_job"]["job_id"]
-    wait_terminal(supervisor, job_id)
+    await wait_terminal(supervisor, job_id)
     loaded = await DelegatedTaskGetTool(supervisor).invoke({"job_id": job_id}, context)
     listed = await DelegatedTaskListTool(supervisor).invoke(
         {"status": "succeeded"},
@@ -399,12 +387,12 @@ async def test_delegation_tools_submit_query_and_list_background_job(
     assert "run_dir" not in loaded.data["background_job"]["result"]
     assert [job["job_id"] for job in listed.data["background_jobs"]] == [job_id]
     assert listed.summary == "listed 1 background job(s): 1 succeeded"
-    supervisor.shutdown()
+    await supervisor.shutdown()
 
 
 async def test_delegated_task_list_summary_counts_jobs_by_status(tmp_path: Path) -> None:
     class StubSupervisor:
-        def list(
+        async def list(
             self,
             status: BackgroundJobStatus | None,
             *,

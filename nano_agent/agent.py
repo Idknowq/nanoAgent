@@ -160,7 +160,7 @@ class NanoAgent:
                 message_store=message_store,
                 compactor=compactor,
                 idle_waiter=(
-                    supervisor.wait_for_completion_async if supervisor is not None else None
+                    supervisor.wait_for_completion if supervisor is not None else None
                 ),
             )
             run = await loop.run(run=run, initial_messages=prompt_bundle.messages)
@@ -177,7 +177,7 @@ class NanoAgent:
 
         if supervisor is not None:
             try:
-                supervisor.shutdown(cancel_active=True)
+                await supervisor.shutdown(cancel_active=True)
             except Exception as exc:  # noqa: BLE001 - shutdown must not discard the main result.
                 run.notes.append(f"Background shutdown failed: {type(exc).__name__}: {exc}")
         run.finished_at = datetime.now(timezone.utc)

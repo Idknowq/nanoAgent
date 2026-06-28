@@ -26,21 +26,19 @@ class TaskService:
         """Create a task without blocking the event loop."""
 
         return await asyncio.to_thread(
-            self.create_sync,
+            self._create_threadsafe,
             subject=subject,
             description=description,
             blocked_by=blocked_by,
         )
 
-    def create_sync(
+    def _create_threadsafe(
         self,
         *,
         subject: str,
         description: str,
         blocked_by: tuple[str, ...] = (),
     ) -> TaskRecord:
-        """Create a task from the current synchronous background supervisor path."""
-
         with self._lock:
             return self._create(
                 subject=subject,
@@ -72,22 +70,18 @@ class TaskService:
     async def get(self, task_id: str) -> TaskRecord:
         """Load a task without blocking the event loop."""
 
-        return await asyncio.to_thread(self.get_sync, task_id)
+        return await asyncio.to_thread(self._get_threadsafe, task_id)
 
-    def get_sync(self, task_id: str) -> TaskRecord:
-        """Load a task from the current synchronous background supervisor path."""
-
+    def _get_threadsafe(self, task_id: str) -> TaskRecord:
         with self._lock:
             return self.store.get(task_id)
 
     async def list(self, status: TaskStatus | None = None) -> list[TaskRecord]:
         """List tasks without blocking the event loop."""
 
-        return await asyncio.to_thread(self.list_sync, status)
+        return await asyncio.to_thread(self._list_threadsafe, status)
 
-    def list_sync(self, status: TaskStatus | None = None) -> list[TaskRecord]:
-        """List tasks from the current synchronous background supervisor path."""
-
+    def _list_threadsafe(self, status: TaskStatus | None = None) -> list[TaskRecord]:
         with self._lock:
             tasks = self.store.list()
             if status is None:
@@ -109,7 +103,7 @@ class TaskService:
         """Update a task without blocking the event loop."""
 
         return await asyncio.to_thread(
-            self.update_sync,
+            self._update_threadsafe,
             task_id,
             subject=subject,
             description=description,
@@ -120,7 +114,7 @@ class TaskService:
             error=error,
         )
 
-    def update_sync(
+    def _update_threadsafe(
         self,
         task_id: str,
         *,
@@ -132,8 +126,6 @@ class TaskService:
         result: str | None = None,
         error: str | None = None,
     ) -> TaskRecord:
-        """Update a task from the current synchronous background supervisor path."""
-
         with self._lock:
             return self._update(
                 task_id,

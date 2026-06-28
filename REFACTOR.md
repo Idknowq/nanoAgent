@@ -27,10 +27,11 @@
 - Step 7C：`edit_file` 和 `activate_skill` 的阻塞文件 I/O 已通过 `asyncio.to_thread()` 移出 event loop；task/delegate 状态操作留到对应 service/supervisor async 化步骤。
 - Step 8：`ContextCompactor` 的大 tool result 处理、transcript 写入和 checkpoint 写入已建立 async 边界；压缩管线仍严格串行。
 - Step 9：`TaskService` 已提供 async API，task tools 已改为 await；`MessageStore` 的 AgentLoop 主写入路径已建立 async 边界。
+- Step 10：`BackgroundJobSupervisor` 已从线程池迁移到 `asyncio.Task`，delegate tools、completion hook、finish_run active-job 检查和 shutdown 路径已改为 async。
 
 仍未完成：
 
-- background supervisor 仍存在同步锁、线程池模型和临时 task service sync 过渡方法。
+- background store、subagent store、task store 仍使用同步文件 I/O，并通过 async 边界或内部线程锁隔离。
 - summary/report/prompt/config store 仍是同步持久化。
 - MCP 尚未接入。
 
@@ -114,9 +115,9 @@ hooks 顺序：
 
 当前剩余需要重构的同步边界：
 
-- `nano_agent/background/supervisor.py`：使用 `ThreadPoolExecutor`、`RLock` 和 `Condition`。
 - `nano_agent/background/store.py`：使用同步文件 I/O。
-- `nano_agent/tasks/service.py`：为当前同步 supervisor 保留临时 sync 过渡方法和线程锁。
+- `nano_agent/subagents/store.py`：使用同步文件 I/O 和线程锁分配子 Agent 标识。
+- `nano_agent/tasks/service.py`：仍用 `RLock` 保护 `asyncio.to_thread()` 中执行的完整同步 TaskStore 事务。
 - summary/report/prompt/config store 仍以同步文件写入为主，需要按调用路径建立 async 边界。
 
 ## 迁移原则
@@ -415,6 +416,8 @@ hooks 顺序：
 
 ## Step 10：多 Agent 调度迁移到 asyncio
 
+状态：已完成。
+
 涉及模块：
 
 - `nano_agent/background/supervisor.py`
@@ -437,12 +440,15 @@ hooks 顺序：
 - `shutdown()` 改为 async，负责取消 active jobs 并 await 任务结束。
 - `SubagentManager.run()` / `execute()` 改为 async。
 - cancellation token 需要兼容 `asyncio.CancelledError`，保证取消时写入 job/task 终态。
+- `FinishRunTool` 支持 async active-job provider，避免 finalization 检查阻塞 event loop。
+- 每个 background job 继续通过 `SubagentManager.execute()` 构造独立 `ToolContext`、`MessageStore`、`CompactionStore`、`ContextCompactor`、`AgentLoop`、hook 实例和 cancellation token。
 
 重构后的结果：
 
 - 多 Agent 运行由 event loop 统一调度。
 - 主 Agent 等待后台完成不阻塞线程。
 - job 状态、task 状态、事件投递和 observed 语义保持稳定。
+- 多 Agent 之间只共享工作区和父级配置，不共享 active messages、compactor、message store 或 cancellation token。
 
 ## Step 11：顶层入口和资源生命周期复查
 

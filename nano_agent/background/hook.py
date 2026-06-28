@@ -16,12 +16,12 @@ class BackgroundCompletionHook(NoOpHook):
 
     async def before_llm_call(self, context, messages, tools) -> HookResult | None:  # type: ignore[no-untyped-def]
         del context, messages, tools
-        events = self.supervisor.drain_events()
+        events = await self.supervisor.drain_events()
         if not events:
             return None
         payload = [
             public_job_data(
-                self.supervisor.get(event.job_id),
+                await self.supervisor.get(event.job_id),
                 self.supervisor.max_result_chars,
             )
             for event in events

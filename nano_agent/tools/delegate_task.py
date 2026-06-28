@@ -102,7 +102,7 @@ class DelegateTaskTool(RuntimeTool):
                         code="background_tasks_unavailable",
                         message="Background task execution is unavailable.",
                     )
-                job = self.supervisor.submit(request, task_id=input_data["task_id"])
+                job = await self.supervisor.submit(request, task_id=input_data["task_id"])
                 return ToolResult(
                     success=True,
                     summary=f"{job.job_id} queued for {job.subagent_id}",
@@ -146,7 +146,7 @@ class DelegatedTaskGetTool(RuntimeTool):
         self.supervisor = supervisor  # 查询当前主运行的后台 Job。
 
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
-        job = self.supervisor.get(input_data["job_id"], observe=True)
+        job = await self.supervisor.get(input_data["job_id"], observe=True)
         return ToolResult(
             success=True,
             summary=f"{job.job_id} is {job.status.value}",
@@ -173,7 +173,7 @@ class DelegatedTaskListTool(RuntimeTool):
         self.supervisor = supervisor  # 枚举当前主运行的后台 Job。
 
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
-        jobs = self.supervisor.list(input_data["status"], observe=True)
+        jobs = await self.supervisor.list(input_data["status"], observe=True)
         status_counts = Counter(job.status for job in jobs)
         status_summary = ", ".join(
             f"{status_counts[status]} {status.value}"
@@ -212,8 +212,8 @@ class DelegatedTaskCancelTool(RuntimeTool):
         self.supervisor = supervisor  # 取消当前主运行的指定后台 Job。
 
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
-        job = self.supervisor.cancel(input_data["job_id"])
-        job = self.supervisor.get(job.job_id, observe=True)
+        job = await self.supervisor.cancel(input_data["job_id"])
+        job = await self.supervisor.get(job.job_id, observe=True)
         return ToolResult(
             success=True,
             summary=f"{job.job_id} is {job.status.value}",
