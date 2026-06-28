@@ -231,7 +231,7 @@ class BackgroundJobSupervisor:
                 "Task integration is unavailable",
                 code="task_integration_unavailable",
             )
-        task = self.task_service.get(task_id)
+        task = self.task_service.get_sync(task_id)
         if task.status != TaskStatus.PENDING:
             raise BackgroundJobError(
                 f"Task is not ready for execution: {task_id} ({task.status.value})",
@@ -245,7 +245,7 @@ class BackgroundJobSupervisor:
 
     def _start_task(self, job: BackgroundJob) -> None:
         if job.task_id is not None and self.task_service is not None:
-            self.task_service.update(
+            self.task_service.update_sync(
                 job.task_id,
                 status=TaskStatus.IN_PROGRESS,
                 owner=job.job_id,
@@ -257,28 +257,28 @@ class BackgroundJobSupervisor:
             return
         result = job.result
         if result.status == SubagentStatus.SUCCEEDED:
-            self.task_service.update(
+            self.task_service.update_sync(
                 job.task_id,
                 status=TaskStatus.COMPLETED,
                 result=result.output or "Subagent completed successfully.",
                 error="",
             )
         elif result.status == SubagentStatus.BLOCKED:
-            self.task_service.update(
+            self.task_service.update_sync(
                 job.task_id,
                 status=TaskStatus.BLOCKED,
                 error=result.error or "Subagent was blocked.",
             )
         elif result.status == SubagentStatus.CANCELLED:
-            task = self.task_service.get(job.task_id)
+            task = self.task_service.get_sync(job.task_id)
             if task.status == TaskStatus.IN_PROGRESS:
-                self.task_service.update(
+                self.task_service.update_sync(
                     job.task_id,
                     status=TaskStatus.PENDING,
                     error=result.error or "Background execution was cancelled.",
                 )
         else:
-            self.task_service.update(
+            self.task_service.update_sync(
                 job.task_id,
                 status=TaskStatus.FAILED,
                 error=result.error or "Subagent execution failed.",

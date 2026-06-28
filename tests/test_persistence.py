@@ -1,4 +1,6 @@
+import asyncio
 import json
+import time
 from pathlib import Path
 
 from nano_agent.agent import NanoAgent
@@ -84,6 +86,30 @@ async def test_message_store_appends_and_recovers_complete_messages(tmp_path: Pa
     assert records[1]["llm_call_id"] == "llm-1"
     assert records[1]["message"]["tool_uses"][0]["input"] == {"path": "README.md"}
     assert MessageStore(tmp_path / "run-1").load_messages() == messages
+
+
+async def test_message_store_append_many_async_does_not_block_event_loop(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    store = MessageStore(tmp_path / "run-1")
+    messages = [AgentMessage(role="user", content="inspect repository")]
+    original_append_many = store.append_many
+
+    def slow_append_many(*args, **kwargs):  # type: ignore[no-untyped-def]
+        time.sleep(0.15)
+        return original_append_many(*args, **kwargs)
+
+    monkeypatch.setattr(store, "append_many", slow_append_many)
+
+    task = asyncio.create_task(store.append_many_async(messages))
+    await asyncio.sleep(0)
+    start = time.perf_counter()
+    await asyncio.sleep(0.01)
+    elapsed = time.perf_counter() - start
+    await task
+
+    assert elapsed < 0.1
 
 
 async def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path) -> None:

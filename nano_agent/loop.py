@@ -1,7 +1,5 @@
-from __future__ import annotations
-
-import json
 import asyncio
+import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -98,7 +96,7 @@ class AgentLoop:
         messages = list(initial_messages)
         run.messages = messages
         if self.message_store is not None:
-            self.message_store.append_many(messages)
+            await self.message_store.append_many_async(messages)
         invalid_end_turns = 0
 
         loop_iterations = self.config.max_steps + int(self.reserve_final_step)
@@ -115,7 +113,7 @@ class AgentLoop:
                 self.reserve_final_step and step_index == self.config.max_steps
             )
             if finalization_step:
-                self._append_messages(
+                await self._append_messages(
                     messages,
                     [
                         AgentMessage(
@@ -155,7 +153,7 @@ class AgentLoop:
             )
             self._raise_if_cancelled()
 
-            self._append_messages(
+            await self._append_messages(
                 messages,
                 [
                     AgentMessage(
@@ -167,7 +165,7 @@ class AgentLoop:
             )
 
             if response.stop_reason == LLMStopReason.END_TURN:
-                self._append_messages(messages, deferred_hook_messages)
+                await self._append_messages(messages, deferred_hook_messages)
                 if not self.tools.contains(FinishRunTool.name):
                     run.status = RunStatus.COMPLETED
                     run.messages = messages
@@ -189,7 +187,7 @@ class AgentLoop:
                     return run
                 invalid_end_turns += 1
                 if invalid_end_turns == 1:
-                    self._append_messages(
+                    await self._append_messages(
                         messages,
                         [
                             AgentMessage(
@@ -215,7 +213,7 @@ class AgentLoop:
                 LLMStopReason.CONTENT_FILTER,
                 LLMStopReason.UNKNOWN,
             }:
-                self._append_messages(messages, deferred_hook_messages)
+                await self._append_messages(messages, deferred_hook_messages)
                 run.status = RunStatus.FAILED
                 run.completion_report = self._protocol_failure_report(
                     f"LLM response stopped with {response.stop_reason.value}."
@@ -236,7 +234,7 @@ class AgentLoop:
             for outcome in outcomes:
                 run.tool_calls.append(outcome.record)
                 round_tool_results.append((outcome.tool_name, outcome.result))
-                self._append_messages(messages, [outcome.message])
+                await self._append_messages(messages, [outcome.message])
                 if (
                     outcome.tool_name == FinishRunTool.name
                     and finish_is_exclusive
@@ -245,7 +243,7 @@ class AgentLoop:
                 ):
                     await self._idle_wait(messages)
                 if outcome.completion_report is not None:
-                    self._append_messages(
+                    await self._append_messages(
                         messages,
                         [
                             *deferred_hook_messages,
@@ -259,7 +257,7 @@ class AgentLoop:
 
             if self._only_active_background_queries(round_tool_results):
                 await self._idle_wait(messages)
-            self._append_messages(
+            await self._append_messages(
                 messages,
                 [
                     *deferred_hook_messages,
@@ -608,7 +606,7 @@ class AgentLoop:
                 failed_call_id = self.context.current_llm_call_id
                 if exc.kind == LLMErrorKind.INVALID_RESPONSE and not invalid_response_used:
                     invalid_response_used = True
-                    self._append_messages(
+                    await self._append_messages(
                         messages,
                         [
                             AgentMessage(
@@ -664,11 +662,11 @@ class AgentLoop:
                 return response, messages, deferred
 
             truncated_call_id = self.context.current_llm_call_id
-            self._append_messages(
+            await self._append_messages(
                 messages,
                 [AgentMessage(role="assistant", content=response.content)],
             )
-            self._append_messages(messages, deferred)
+            await self._append_messages(messages, deferred)
             if continuation_count >= self.config.llm_max_continuations:
                 raise LLMServiceError(
                     "LLM output remained truncated after "
@@ -677,7 +675,7 @@ class AgentLoop:
                 )
 
             continuation_count += 1
-            self._append_messages(
+            await self._append_messages(
                 messages,
                 [
                     AgentMessage(
@@ -717,7 +715,7 @@ class AgentLoop:
         self._raise_if_cancelled()
 
         try:
-            self._append_messages(
+            await self._append_messages(
                 messages,
                 await self.hook_pipeline.before_llm_call(self.context, messages, tool_specs),
             )
@@ -766,7 +764,7 @@ class AgentLoop:
         completed = await self.idle_waiter(self.config.background_idle_wait_timeout_seconds)
         if completed:
             return
-        self._append_messages(
+        await self._append_messages(
             messages,
             [
                 AgentMessage(
@@ -852,11 +850,16 @@ class AgentLoop:
             remaining_risks=["Repository work may be incomplete or unverified."],
         )
 
-    def _append_messages(
+    async def _append_messages(
         self,
         target: list[AgentMessage],
         messages: list[AgentMessage],
     ) -> None:
+        """Append messages to memory and durable storage in protocol order."""
+
         target.extend(messages)
         if self.message_store is not None:
-            self.message_store.append_many(messages, self.context.current_llm_call_id)
+            await self.message_store.append_many_async(
+                messages,
+                self.context.current_llm_call_id,
+            )

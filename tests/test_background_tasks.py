@@ -239,7 +239,7 @@ async def test_queued_and_running_jobs_can_be_cancelled(tmp_path: Path) -> None:
 
 async def test_job_completion_updates_linked_task(tmp_path: Path) -> None:
     task_service = TaskService(TaskStore(tmp_path / "run"))
-    task = task_service.create(subject="Inspect", description="Inspect files")
+    task = task_service.create_sync(subject="Inspect", description="Inspect files")
     manager = ControlledSubagentManager()
     manager.release.set()
     supervisor = make_supervisor(tmp_path, manager, task_service=task_service)
@@ -247,7 +247,7 @@ async def test_job_completion_updates_linked_task(tmp_path: Path) -> None:
     job = supervisor.submit(make_request("inspect"), task_id=task.task_id)
     assert wait_terminal(supervisor, job.job_id).status == BackgroundJobStatus.SUCCEEDED
 
-    completed = task_service.get(task.task_id)
+    completed = task_service.get_sync(task.task_id)
     assert completed.status == TaskStatus.COMPLETED
     assert completed.owner == job.job_id
     assert completed.result == "completed inspect"
@@ -256,7 +256,7 @@ async def test_job_completion_updates_linked_task(tmp_path: Path) -> None:
 
 async def test_cancelled_execution_returns_linked_task_to_pending(tmp_path: Path) -> None:
     task_service = TaskService(TaskStore(tmp_path / "run"))
-    task = task_service.create(subject="Inspect", description="Inspect files")
+    task = task_service.create_sync(subject="Inspect", description="Inspect files")
     manager = ControlledSubagentManager()
     supervisor = make_supervisor(tmp_path, manager, task_service=task_service)
 
@@ -264,7 +264,7 @@ async def test_cancelled_execution_returns_linked_task_to_pending(tmp_path: Path
     manager.started.get(timeout=1)
     supervisor.cancel(job.job_id)
     assert wait_terminal(supervisor, job.job_id).status == BackgroundJobStatus.CANCELLED
-    assert task_service.get(task.task_id).status == TaskStatus.PENDING
+    assert task_service.get_sync(task.task_id).status == TaskStatus.PENDING
     supervisor.shutdown()
 
 

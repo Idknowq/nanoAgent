@@ -56,7 +56,7 @@ class TaskCreateTool(RuntimeTool):
 
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         del context
-        task = self.service.create(
+        task = await self.service.create(
             subject=input_data["subject"],
             description=input_data["description"],
             blocked_by=input_data["blocked_by"],
@@ -85,7 +85,7 @@ class TaskGetTool(RuntimeTool):
 
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         del context
-        task = self.service.get(input_data["task_id"])
+        task = await self.service.get(input_data["task_id"])
         return ToolResult(
             success=True,
             summary=f"loaded {task.task_id} with status {task.status.value}",
@@ -111,7 +111,7 @@ class TaskListTool(RuntimeTool):
 
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         del context
-        tasks = self.service.list(input_data["status"])
+        tasks = await self.service.list(input_data["status"])
         return ToolResult(
             success=True,
             summary=f"listed {len(tasks)} task(s)",
@@ -140,7 +140,7 @@ class TaskUpdateTool(RuntimeTool):
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
         del context
         task_id = input_data.pop("task_id")
-        task = self.service.update(task_id, **input_data)
+        task = await self.service.update(task_id, **input_data)
         return ToolResult(
             success=True,
             summary=f"updated {task.task_id} to {task.status.value}",

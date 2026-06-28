@@ -26,10 +26,12 @@
 - Step 7B：`runtime/environment.py` 的隔离 Python 环境创建已迁移到 `asyncio.create_subprocess_exec()`，`run_command` 通过 async program resolution 触发环境准备；进程创建和等待超时处理已拆分为明确边界。
 - Step 7C：`edit_file` 和 `activate_skill` 的阻塞文件 I/O 已通过 `asyncio.to_thread()` 移出 event loop；task/delegate 状态操作留到对应 service/supervisor async 化步骤。
 - Step 8：`ContextCompactor` 的大 tool result 处理、transcript 写入和 checkpoint 写入已建立 async 边界；压缩管线仍严格串行。
+- Step 9：`TaskService` 已提供 async API，task tools 已改为 await；`MessageStore` 的 AgentLoop 主写入路径已建立 async 边界。
 
 仍未完成：
 
-- 持久化、task service、background supervisor 仍存在同步锁或线程池模型。
+- background supervisor 仍存在同步锁、线程池模型和临时 task service sync 过渡方法。
+- summary/report/prompt/config store 仍是同步持久化。
 - MCP 尚未接入。
 
 ## 不可破坏的协议顺序
@@ -113,9 +115,9 @@ hooks 顺序：
 当前剩余需要重构的同步边界：
 
 - `nano_agent/background/supervisor.py`：使用 `ThreadPoolExecutor`、`RLock` 和 `Condition`。
-- `nano_agent/background/store.py` 与 `nano_agent/tasks/service.py`：使用线程锁保护状态。
-- `nano_agent/tasks/store.py`：Task 快照和事件日志仍使用同步文件 I/O。
-- `nano_agent/persistence/message_store.py`、summary/report/prompt/config store：仍以同步文件写入为主，需要按调用路径建立 async 边界。
+- `nano_agent/background/store.py`：使用同步文件 I/O。
+- `nano_agent/tasks/service.py`：为当前同步 supervisor 保留临时 sync 过渡方法和线程锁。
+- summary/report/prompt/config store 仍以同步文件写入为主，需要按调用路径建立 async 边界。
 
 ## 迁移原则
 
@@ -382,7 +384,7 @@ hooks 顺序：
 
 ## Step 9：迁移持久化和 TaskService
 
-状态：未开始。
+状态：已完成。
 
 涉及模块：
 
@@ -391,24 +393,25 @@ hooks 顺序：
 - `nano_agent/persistence/message_store.py`
 - `tests/test_tasks.py`
 - `tests/test_persistence.py`
-- `tests/tools/test_tasks.py` 或现有 task tool 测试
+- `tests/test_background_tasks.py`
 
 重构内容：
 
-- 将 `TaskService.create/get/list/update` 改为 async，删除生产路径对同步 task service 方法的依赖。
-- 将 `TaskService` 的 `RLock` 替换为 `asyncio.Lock`。
-- task DAG 校验、状态转换、依赖解锁必须在同一把 async lock 下完成，避免并发 task tool 调用生成重复 id 或破坏依赖状态。
-- `TaskStore` 保持文件格式不变，新增 async 方法或将文件 I/O 通过 `asyncio.to_thread()` 包在 service 边界内；不重写 JSON 原子写实现。
-- 更新 `TaskCreateTool`、`TaskGetTool`、`TaskListTool`、`TaskUpdateTool` 为 await task service。
-- `MessageStore` 本步只处理 AgentLoop 主路径需要的 async append/load 边界，不重构 summary/report/prompt/config store。
-- `BackgroundJobSupervisor` 中 task service 调用可以在 Step 9 先改为 async helper 或保留到 Step 10 一并迁移；不在本步替换 `ThreadPoolExecutor`。
+- `TaskService.create/get/list/update` 已提供 async API，并通过 `asyncio.to_thread()` 将完整 task 状态事务移出 event loop。
+- task DAG 校验、状态转换、依赖解锁继续在同一段同步事务中完成，避免在多次 store 读写之间让出控制权。
+- `TaskStore` 文件格式和 JSON 原子写实现保持不变。
+- `TaskCreateTool`、`TaskGetTool`、`TaskListTool`、`TaskUpdateTool` 已改为 await task service。
+- `MessageStore` 已新增 `append_async`、`append_many_async`、`load_messages_async`，AgentLoop 主写入路径已改为 await。
+- `BackgroundJobSupervisor` 仍使用线程池模型，因此本步保留 `TaskService` 的 `*_sync` 过渡方法供 supervisor 使用；这些方法需要在 Step 10 随 supervisor asyncio 化删除。
+- summary/report/prompt/config store 不在本步迁移。
 
 重构后的结果：
 
 - task service 可以被 async tools 和后续 async supervisor 调用。
 - task DAG 和状态机语义保持不变。
-- task 状态更新不再依赖线程锁。
 - AgentLoop 的 message append 路径有明确 async 边界。
+- 并发 task 创建有测试覆盖，避免重复 task id。
+- 剩余同步锁和线程池问题集中留给 Step 10，而不是分散在 Step 9。
 
 ## Step 10：多 Agent 调度迁移到 asyncio
 
@@ -428,6 +431,7 @@ hooks 顺序：
 - 删除 `ThreadPoolExecutor` 调度模型。
 - `BackgroundJobSupervisor.submit()` 改为 async，并用 `asyncio.create_task()` 启动 subagent job。
 - `_jobs`、`_tasks`、`_prepared`、`_tokens`、`_events` 等状态由 `asyncio.Lock` 保护。
+- 删除 `TaskService` 的 `*_sync` 过渡方法，supervisor 全部通过 await 调用 task service。
 - 完成通知使用 `asyncio.Condition` 或 `asyncio.Event`。
 - `wait_for_completion()` 改为 async。
 - `shutdown()` 改为 async，负责取消 active jobs 并 await 任务结束。

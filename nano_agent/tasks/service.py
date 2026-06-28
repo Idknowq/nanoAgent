@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from threading import RLock
 
@@ -15,13 +16,31 @@ class TaskService:
         self.store = store  # 保存当前主运行的 Task 持久化接口。
         self._lock = RLock()  # 串行化 Task 的读取、状态转换和依赖解锁。
 
-    def create(
+    async def create(
         self,
         *,
         subject: str,
         description: str,
         blocked_by: tuple[str, ...] = (),
     ) -> TaskRecord:
+        """Create a task without blocking the event loop."""
+
+        return await asyncio.to_thread(
+            self.create_sync,
+            subject=subject,
+            description=description,
+            blocked_by=blocked_by,
+        )
+
+    def create_sync(
+        self,
+        *,
+        subject: str,
+        description: str,
+        blocked_by: tuple[str, ...] = (),
+    ) -> TaskRecord:
+        """Create a task from the current synchronous background supervisor path."""
+
         with self._lock:
             return self._create(
                 subject=subject,
@@ -50,18 +69,32 @@ class TaskService:
         self.store.save(task, event_type="created", previous_status=None)
         return task
 
-    def get(self, task_id: str) -> TaskRecord:
+    async def get(self, task_id: str) -> TaskRecord:
+        """Load a task without blocking the event loop."""
+
+        return await asyncio.to_thread(self.get_sync, task_id)
+
+    def get_sync(self, task_id: str) -> TaskRecord:
+        """Load a task from the current synchronous background supervisor path."""
+
         with self._lock:
             return self.store.get(task_id)
 
-    def list(self, status: TaskStatus | None = None) -> list[TaskRecord]:
+    async def list(self, status: TaskStatus | None = None) -> list[TaskRecord]:
+        """List tasks without blocking the event loop."""
+
+        return await asyncio.to_thread(self.list_sync, status)
+
+    def list_sync(self, status: TaskStatus | None = None) -> list[TaskRecord]:
+        """List tasks from the current synchronous background supervisor path."""
+
         with self._lock:
             tasks = self.store.list()
             if status is None:
                 return tasks
             return [task for task in tasks if task.status == status]
 
-    def update(
+    async def update(
         self,
         task_id: str,
         *,
@@ -73,6 +106,34 @@ class TaskService:
         result: str | None = None,
         error: str | None = None,
     ) -> TaskRecord:
+        """Update a task without blocking the event loop."""
+
+        return await asyncio.to_thread(
+            self.update_sync,
+            task_id,
+            subject=subject,
+            description=description,
+            status=status,
+            blocked_by=blocked_by,
+            owner=owner,
+            result=result,
+            error=error,
+        )
+
+    def update_sync(
+        self,
+        task_id: str,
+        *,
+        subject: str | None = None,
+        description: str | None = None,
+        status: TaskStatus | None = None,
+        blocked_by: tuple[str, ...] | None = None,
+        owner: str | None = None,
+        result: str | None = None,
+        error: str | None = None,
+    ) -> TaskRecord:
+        """Update a task from the current synchronous background supervisor path."""
+
         with self._lock:
             return self._update(
                 task_id,

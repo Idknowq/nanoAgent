@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -32,19 +33,36 @@ def make_context(tmp_path: Path) -> ToolContext:
 
 async def test_task_ids_survive_service_recreation(tmp_path: Path) -> None:
     first_service = make_service(tmp_path)
-    first = first_service.create(subject="First", description="First task")
+    first = await first_service.create(subject="First", description="First task")
     second_service = make_service(tmp_path)
 
-    second = second_service.create(subject="Second", description="Second task")
+    second = await second_service.create(subject="Second", description="Second task")
 
     assert first.task_id == "task-1"
     assert second.task_id == "task-2"
 
 
+async def test_concurrent_task_creates_get_unique_ids(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+
+    tasks = await asyncio.gather(
+        *[
+            service.create(subject=f"Task {index}", description="Run work")
+            for index in range(10)
+        ]
+    )
+
+    task_ids = sorted(
+        (task.task_id for task in tasks),
+        key=lambda value: int(value.split("-")[1]),
+    )
+    assert task_ids == [f"task-{index}" for index in range(1, 11)]
+
+
 async def test_task_with_incomplete_dependency_is_blocked_then_unlocked(tmp_path: Path) -> None:
     service = make_service(tmp_path)
-    upstream = service.create(subject="Upstream", description="Prepare input")
-    downstream = service.create(
+    upstream = await service.create(subject="Upstream", description="Prepare input")
+    downstream = await service.create(
         subject="Downstream",
         description="Consume input",
         blocked_by=(upstream.task_id,),
@@ -53,43 +71,43 @@ async def test_task_with_incomplete_dependency_is_blocked_then_unlocked(tmp_path
     assert downstream.status == TaskStatus.BLOCKED
     assert downstream.blocked_reason == TaskBlockedReason.DEPENDENCY
 
-    service.update(upstream.task_id, status=TaskStatus.IN_PROGRESS)
-    service.update(upstream.task_id, status=TaskStatus.COMPLETED, result="ready")
+    await service.update(upstream.task_id, status=TaskStatus.IN_PROGRESS)
+    await service.update(upstream.task_id, status=TaskStatus.COMPLETED, result="ready")
 
-    unlocked = service.get(downstream.task_id)
+    unlocked = await service.get(downstream.task_id)
     assert unlocked.status == TaskStatus.PENDING
     assert unlocked.blocked_reason is None
 
 
 async def test_external_block_is_not_unlocked_by_dependency_completion(tmp_path: Path) -> None:
     service = make_service(tmp_path)
-    upstream = service.create(subject="Upstream", description="Prepare input")
-    downstream = service.create(
+    upstream = await service.create(subject="Upstream", description="Prepare input")
+    downstream = await service.create(
         subject="Downstream",
         description="Consume input",
         blocked_by=(upstream.task_id,),
     )
-    service.update(downstream.task_id, status=TaskStatus.BLOCKED, error="Need credentials")
+    await service.update(downstream.task_id, status=TaskStatus.BLOCKED, error="Need credentials")
 
-    service.update(upstream.task_id, status=TaskStatus.IN_PROGRESS)
-    service.update(upstream.task_id, status=TaskStatus.COMPLETED)
+    await service.update(upstream.task_id, status=TaskStatus.IN_PROGRESS)
+    await service.update(upstream.task_id, status=TaskStatus.COMPLETED)
 
-    still_blocked = service.get(downstream.task_id)
+    still_blocked = await service.get(downstream.task_id)
     assert still_blocked.status == TaskStatus.BLOCKED
     assert still_blocked.blocked_reason == TaskBlockedReason.EXTERNAL
 
 
 async def test_missing_self_and_cyclic_dependencies_are_rejected(tmp_path: Path) -> None:
     service = make_service(tmp_path)
-    first = service.create(subject="First", description="First task")
-    second = service.create(
+    first = await service.create(subject="First", description="First task")
+    second = await service.create(
         subject="Second",
         description="Second task",
         blocked_by=(first.task_id,),
     )
 
     with pytest.raises(TaskError) as missing:
-        service.create(
+        await service.create(
             subject="Missing",
             description="Missing dependency",
             blocked_by=("task-99",),
@@ -97,65 +115,65 @@ async def test_missing_self_and_cyclic_dependencies_are_rejected(tmp_path: Path)
     assert missing.value.code == "invalid_dependency"
 
     with pytest.raises(TaskError) as self_dependency:
-        service.update(first.task_id, blocked_by=(first.task_id,))
+        await service.update(first.task_id, blocked_by=(first.task_id,))
     assert self_dependency.value.code == "invalid_dependency"
 
     with pytest.raises(TaskError) as cycle:
-        service.update(first.task_id, blocked_by=(second.task_id,))
+        await service.update(first.task_id, blocked_by=(second.task_id,))
     assert cycle.value.code == "dependency_cycle"
 
     with pytest.raises(TaskError) as duplicate:
-        service.update(second.task_id, blocked_by=(first.task_id, first.task_id))
+        await service.update(second.task_id, blocked_by=(first.task_id, first.task_id))
     assert duplicate.value.code == "invalid_dependency"
 
 
 async def test_incomplete_dependency_prevents_start(tmp_path: Path) -> None:
     service = make_service(tmp_path)
-    upstream = service.create(subject="Upstream", description="Prepare input")
-    downstream = service.create(
+    upstream = await service.create(subject="Upstream", description="Prepare input")
+    downstream = await service.create(
         subject="Downstream",
         description="Consume input",
         blocked_by=(upstream.task_id,),
     )
 
     with pytest.raises(TaskError) as error:
-        service.update(downstream.task_id, status=TaskStatus.PENDING)
+        await service.update(downstream.task_id, status=TaskStatus.PENDING)
 
     assert error.value.code == "dependency_incomplete"
 
 
 async def test_in_progress_task_cannot_add_incomplete_dependency(tmp_path: Path) -> None:
     service = make_service(tmp_path)
-    dependency = service.create(subject="Dependency", description="Prepare input")
-    task = service.create(subject="Task", description="Run work")
-    service.update(task.task_id, status=TaskStatus.IN_PROGRESS)
+    dependency = await service.create(subject="Dependency", description="Prepare input")
+    task = await service.create(subject="Task", description="Run work")
+    await service.update(task.task_id, status=TaskStatus.IN_PROGRESS)
 
     with pytest.raises(TaskError) as error:
-        service.update(task.task_id, blocked_by=(dependency.task_id,))
+        await service.update(task.task_id, blocked_by=(dependency.task_id,))
 
     assert error.value.code == "dependency_incomplete"
 
 
 async def test_failed_task_can_retry_but_terminal_task_cannot_reopen(tmp_path: Path) -> None:
     service = make_service(tmp_path)
-    task = service.create(subject="Task", description="Run work")
-    service.update(task.task_id, status=TaskStatus.IN_PROGRESS)
-    service.update(task.task_id, status=TaskStatus.FAILED, error="failed")
+    task = await service.create(subject="Task", description="Run work")
+    await service.update(task.task_id, status=TaskStatus.IN_PROGRESS)
+    await service.update(task.task_id, status=TaskStatus.FAILED, error="failed")
 
-    retried = service.update(task.task_id, status=TaskStatus.PENDING)
+    retried = await service.update(task.task_id, status=TaskStatus.PENDING)
     assert retried.status == TaskStatus.PENDING
 
-    service.update(task.task_id, status=TaskStatus.IN_PROGRESS)
-    service.update(task.task_id, status=TaskStatus.COMPLETED)
+    await service.update(task.task_id, status=TaskStatus.IN_PROGRESS)
+    await service.update(task.task_id, status=TaskStatus.COMPLETED)
     with pytest.raises(TaskError) as error:
-        service.update(task.task_id, status=TaskStatus.PENDING)
+        await service.update(task.task_id, status=TaskStatus.PENDING)
     assert error.value.code == "invalid_task_transition"
 
 
 async def test_task_snapshots_and_events_are_persisted(tmp_path: Path) -> None:
     service = make_service(tmp_path)
-    task = service.create(subject="Persist", description="Persist task")
-    service.update(task.task_id, status=TaskStatus.IN_PROGRESS, owner="main")
+    task = await service.create(subject="Persist", description="Persist task")
+    await service.update(task.task_id, status=TaskStatus.IN_PROGRESS, owner="main")
 
     tasks_dir = tmp_path / "run" / "tasks"
     snapshot = json.loads((tasks_dir / "task-1.json").read_text(encoding="utf-8"))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +44,15 @@ class MessageStore:
             os.fsync(file.fileno())
         return record
 
+    async def append_async(
+        self,
+        message: AgentMessage,
+        llm_call_id: str | None = None,
+    ) -> MessageRecord:
+        """Append one message without blocking the event loop."""
+
+        return await asyncio.to_thread(self.append, message, llm_call_id)
+
     def append_many(
         self,
         messages: list[AgentMessage],
@@ -50,6 +60,15 @@ class MessageStore:
     ) -> None:
         for message in messages:
             self.append(message, llm_call_id)
+
+    async def append_many_async(
+        self,
+        messages: list[AgentMessage],
+        llm_call_id: str | None = None,
+    ) -> None:
+        """Append messages without blocking the event loop."""
+
+        await asyncio.to_thread(self.append_many, messages, llm_call_id)
 
     def load_messages(self) -> list[AgentMessage]:
         if not self.path.exists():
@@ -61,6 +80,11 @@ class MessageStore:
         ]
         records.sort(key=lambda record: record.sequence)
         return [record.message for record in records]
+
+    async def load_messages_async(self) -> list[AgentMessage]:
+        """Load persisted messages without blocking the event loop."""
+
+        return await asyncio.to_thread(self.load_messages)
 
     def _existing_record_count(self) -> int:
         if not self.path.exists():
