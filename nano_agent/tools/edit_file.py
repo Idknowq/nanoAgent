@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import stat
 import tempfile
@@ -63,6 +64,10 @@ class EditFileTool(RuntimeTool):
         }
 
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+        return await asyncio.to_thread(self._run_sync, input_data, context)
+
+    def _run_sync(self, input_data: dict, context: ToolContext) -> ToolResult:
+        """Apply the replacement using blocking filesystem APIs."""
         try:
             path = resolve_workspace_path(
                 context.workspace_path,

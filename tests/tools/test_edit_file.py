@@ -1,5 +1,7 @@
+import asyncio
 import os
 import stat
+import time
 from pathlib import Path
 
 import pytest
@@ -56,6 +58,34 @@ async def test_edit_file_supports_expected_multiple_replacements(tmp_path: Path)
 
     assert result.success
     assert target.read_text(encoding="utf-8") == "new new new"
+
+
+async def test_edit_file_does_not_block_event_loop(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    target = tmp_path / "data.txt"
+    target.write_text("old", encoding="utf-8")
+    tool = EditFileTool()
+    original_atomic_write = tool._atomic_write
+
+    def slow_atomic_write(*args, **kwargs):  # type: ignore[no-untyped-def]
+        time.sleep(0.15)
+        return original_atomic_write(*args, **kwargs)
+
+    monkeypatch.setattr(tool, "_atomic_write", slow_atomic_write)
+    started = time.monotonic()
+    task = asyncio.create_task(
+        tool.invoke(
+            {"path": "data.txt", "old_text": "old", "new_text": "new"},
+            make_context(tmp_path),
+        )
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
+    elapsed = time.monotonic() - started
+    result = await task
+
+    assert elapsed < 0.10
+    assert result.success
+    assert target.read_text(encoding="utf-8") == "new"
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,6 @@
+import asyncio
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -252,6 +254,37 @@ async def test_activate_skill_does_not_inject_body_twice(tmp_path: Path) -> None
     assert first_hook is not None
     assert not second.data["newly_activated"]
     assert second_hook is None
+
+
+async def test_activate_skill_does_not_block_event_loop(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    skill_root = tmp_path / "skills"
+    write_skill(skill_root, "python-repository")
+    session = SkillSession(SkillRegistry(skill_root))
+    tool = ActivateSkillTool(session)
+    context = ToolContext(
+        run_id="run-1",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "run-1",
+        config=AgentConfig(),
+    )
+    original_activate = session.activate
+
+    def slow_activate(name: str):  # type: ignore[no-untyped-def]
+        time.sleep(0.15)
+        return original_activate(name)
+
+    monkeypatch.setattr(session, "activate", slow_activate)
+    started = time.monotonic()
+    task = asyncio.create_task(tool.invoke({"name": "python-repository"}, context))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0.01)
+    elapsed = time.monotonic() - started
+    result = await task
+
+    assert elapsed < 0.10
+    assert result.success
+    assert result.data["newly_activated"]
 
 
 async def test_compaction_state_builder_extracts_bounded_tool_evidence(tmp_path: Path) -> None:

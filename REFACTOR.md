@@ -24,10 +24,10 @@
 - Step 6：OpenAI-compatible provider 已迁移到 `AsyncOpenAI`，真实 LLM 网络调用不会阻塞 event loop。
 - Step 7A：`clone_repo` 已迁移到 `asyncio.create_subprocess_exec()`，git clone 和元数据查询不再使用同步 `subprocess.run()`。
 - Step 7B：`runtime/environment.py` 的隔离 Python 环境创建已迁移到 `asyncio.create_subprocess_exec()`，`run_command` 通过 async program resolution 触发环境准备。
+- Step 7C：`edit_file` 和 `activate_skill` 的阻塞文件 I/O 已通过 `asyncio.to_thread()` 移出 event loop；task/delegate 状态操作留到对应 service/supervisor async 化步骤。
 
 仍未完成：
 
-- 剩余内置工具仍需做阻塞点审计。
 - 持久化、task service、background supervisor 仍存在同步锁或线程池模型。
 - MCP 尚未接入。
 
@@ -317,7 +317,7 @@ hooks 顺序：
 
 ## Step 7：迁移剩余内置工具和运行环境准备
 
-状态：进行中，Step 7A 和 Step 7B 已完成。
+状态：已完成。
 
 涉及模块：
 
@@ -335,21 +335,16 @@ hooks 顺序：
 
 - `clone_repo` 使用 `asyncio.create_subprocess_exec()` 执行 git，并保留 timeout、stderr/stdout tail、工作区空目录约束和错误分类。已完成。
 - `runtime/environment.py` 中需要执行外部命令的逻辑改为 async subprocess。已完成。
-- 对文件写入、skill 读取、task 工具和 delegate 工具进行阻塞点审计：
-  - 短文件 I/O 可暂时保留同步实现。
-  - 可能长时间运行的文件 I/O 或目录遍历放入 `asyncio.to_thread()`。
-  - 状态服务调用等到 task service 异步化后改为 await。
+- `edit_file` 的文件读写和原子写通过 `asyncio.to_thread()` 隔离。已完成。
+- `activate_skill` 的 Skill 正文加载和激活记录写入通过 `asyncio.to_thread()` 隔离。已完成。
+- task tools 和 delegate tools 的同步状态操作留到 TaskService 与 background supervisor async 化步骤处理。
 - 根据工具副作用复查并发元数据。
 
 重构后的结果：
 
-- 内置工具不会在长时间子进程或重 I/O 上阻塞 event loop。
+- 内置工具不会在长时间子进程或重文件 I/O 上阻塞 event loop。
 - 工具权限、workspace containment、输入校验和 `ToolResult` 格式不变。
 - 为 task service 和 background supervisor 的 async 化清理工具层依赖。
-
-剩余工作：
-
-- 审计 `edit_file`、`activate_skill`、task tools、delegate tools 和 `finish_run` 的阻塞点。
 
 ## Step 8：整理 ContextCompactor 和持久化异步边界
 

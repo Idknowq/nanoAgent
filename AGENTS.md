@@ -28,7 +28,7 @@
 
 已开发功能应在保持行为兼容和测试覆盖的前提下逐步转为异步。多 Agent 的实现机制后续应从 `ThreadPoolExecutor` 线程池模型迁移到基于 `asyncio` task、异步锁和异步通知的调度模型。
 
-每次开发完成后更新 REFACTOR.md 文档。
+每次开发完成后更新 `REFACTOR.md` 文档。
 
 ## 代码风格
 

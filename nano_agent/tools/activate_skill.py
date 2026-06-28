@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from pydantic import Field
 
 from nano_agent.models import ApprovalLevel
@@ -37,6 +39,10 @@ class ActivateSkillTool(RuntimeTool):
         self.activation_store = activation_store  # 可选的激活审计存储。
 
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+        return await asyncio.to_thread(self._run_sync, input_data, context)
+
+    def _run_sync(self, input_data: dict, context: ToolContext) -> ToolResult:
+        """Activate the skill using blocking registry and audit-store I/O."""
         name = input_data["name"]
         try:
             loaded, newly_activated = self.session.activate(name)
