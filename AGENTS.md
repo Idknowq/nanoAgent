@@ -1,49 +1,45 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## 项目简介
 
-`nano_agent/` contains the Python package. Key modules include `tools/` for runtime tools, `context/` for compaction, `services/` for LLM clients, `prompts/` and `prompts/templates/` for prompt assembly, `subagents/` and `background/` for delegated work, `tasks/` for persistent task state, and `persistence/` for run artifacts. Tests live under `tests/`, with tool-specific tests in `tests/tools/` and runtime environment tests in `tests/runtime/`. Documentation is in `README.md`, `README_zh.md`, and `docs/`. Runtime outputs are written under `.nano/` and should not be committed.
+本项目是一个轻量级 Coding Agent，用于面向真实代码仓库执行诊断、修复、验证和结果汇报。整体架构围绕 Agent loop 展开：LLM 产生工具调用，运行时执行工具并回填结果，直到提交结构化完成报告。
 
-## Build, Test, and Development Commands
+主要模块职责如下：
 
-Use Python 3.11+.
+- `tools/`：定义运行时工具体系，包括文件读取、搜索、编辑、命令执行、仓库克隆、任务委派和运行结束报告等工具。
+- `tasks/`：维护持久化任务状态，支持任务创建、查询、更新、依赖关系和状态流转。
+- `context/`：负责上下文状态管理和压缩，包括工具结果持久化、消息裁剪和摘要压缩。
+- `services/`：封装 LLM 客户端、错误归一化、重试策略和 provider 注册。
+- `prompts/`：负责系统提示词、用户任务、skill 元数据和上下文信息的组装。
+- `hooks/`：提供 LLM 调用和工具执行前后的扩展点，用于审计、权限控制、指标采集和上下文注入。
+- `background/` 与 `subagents/`：支持后台子 Agent 并行执行、状态持久化、取消和结果回传。
+- `persistence/`：管理运行过程中的消息、配置、报告、摘要和其他持久化产物。
+- `skills/` 与 `memory/`：提供可按需加载的能力说明和历史偏好/经验注入。
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+测试位于 `tests/`，文档位于 `README.md`、`README_zh.md` 和 `docs/`。运行产物写入 `.nano/`，不得提交。
 
-Run the CLI during development:
+## 环境
 
-```bash
-python -m nano_agent.cli run https://github.com/example/repo "Inspect and repair verified defects."
-```
+使用项目虚拟环境中的 Python 3.13。默认所有开发、测试和脚本执行都应基于该虚拟环境。
 
-Run all tests:
+## 开发方向
 
-```bash
-.venv/bin/python -m pytest -q
-```
+后续开发方向是从当前同步执行模型逐步迁移到 `asyncio`。新功能应优先基于异步接口设计和实现，避免继续扩大同步调用链。
 
-If local proxy variables interfere with OpenAI client construction, clear them for tests:
+已开发功能应在保持行为兼容和测试覆盖的前提下逐步转为异步。多 Agent 的实现机制后续应从 `ThreadPoolExecutor` 线程池模型迁移到基于 `asyncio` task、异步锁和异步通知的调度模型。
 
-```bash
-env -u ALL_PROXY -u HTTP_PROXY -u HTTPS_PROXY .venv/bin/python -m pytest -q
-```
+## 代码风格
 
-## Coding Style & Naming Conventions
+保持现有代码风格，优先做小范围、可验证的修改。代码应保持高内聚、低耦合和模块化，新增能力应放入职责匹配的模块中，避免把不同层级的逻辑混在同一个类或函数里。
 
-Use 4-space indentation and Python type hints. Keep modules focused by domain: new tools belong in `nano_agent/tools/`, stateful services in their matching package, and tests in the corresponding `tests/test_*.py` file. `ruff` is configured for line length 100 and `py311`; follow that limit even when not running a formatter.
+使用 4 空格缩进、Python 类型标注，并遵守当前项目的命名习惯和约定。新增测试应放在与被测模块对应的位置。
 
-## Testing Guidelines
+新增类必须包含明确的作用说明。类中的成员变量应添加简短注释，说明其用途或维护的状态。每个函数都必须有功能说明，说明该函数负责什么，不写空泛或重复代码本身的注释。
 
-The project uses `pytest`. Add or update targeted tests for behavioral changes, especially around tool protocols, persistence, context compaction, task state transitions, and subagent scheduling. Name tests descriptively, for example `test_tool_result_budget_repairs_truncated_persisted_result`. Prefer focused unit tests plus one integration-style loop test when changing agent control flow.
+修改工具、上下文压缩、持久化、任务状态、后台调度或权限相关逻辑时，应补充有针对性的测试，并保持消息协议和运行产物的兼容性。
 
-## Commit & Pull Request Guidelines
+## 对话要求
 
-Git history uses concise conventional-style messages such as `feat(agent): ...`, `fix(context): ...`, and `update(config&skill): ...`. Keep commits scoped and avoid mixing generated run artifacts with code changes. Pull requests should include a short problem statement, implementation summary, tests run, and any remaining risks or limitations.
+交流应简洁、务实，优先说明结论、依据和下一步。不要使用夸张或情绪化表达。
 
-## Agent-Specific Instructions
-
-Do not commit `.nano/`, `.venv/`, caches, or local `.env` files. Preserve append-only run artifacts and message protocol semantics when changing persistence or compaction. When modifying tool access, verify path containment and permission behavior with tests.
+每次开始修改文件或代码前，必须先向用户确认修改范围和意图；用户明确确认后再执行修改。
