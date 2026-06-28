@@ -17,6 +17,8 @@ from nano_agent.hooks.permission import (
     PermissionHook,
     PermissionPolicy,
 )
+from nano_agent.hooks.pipeline import HookPipeline
+
 __all__ = [
     "AgentHook",
     "AuditHook",
@@ -27,6 +29,7 @@ __all__ = [
     "ConsoleSection",
     "ConsoleSectionProvider",
     "HookResult",
+    "HookPipeline",
     "LLMCallRecord",
     "LLMMetricsHook",
     "NoOpHook",

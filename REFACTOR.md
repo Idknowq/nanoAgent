@@ -12,6 +12,23 @@
 - 外部进程调用使用 `asyncio.create_subprocess_exec()`。
 - HTTP/MCP 等网络能力使用异步 client。
 
+## 当前进度
+
+已完成：
+
+- Step 1：核心接口已改为 async，包括 LLM client 协议、runtime tool 协议、hooks、context compactor、subagent manager、agent loop 和顶层 agent run 路径。
+- Step 2：`AgentLoop` 已拆出单个 tool execution 边界，并保持 LLM、tool、hook、finalization、background idle wait 的协议顺序。
+- Step 3：同一轮 LLM 返回的安全 tool batch 已支持可控并发，结果仍按原始 `tool_uses` 顺序写回。
+- Step 4：`run_command` 已迁移到 `asyncio.create_subprocess_exec()`；`read_file`、`list_files`、`grep` 的阻塞文件 I/O 已通过 `asyncio.to_thread()` 移出 event loop。
+
+仍未完成：
+
+- hooks 仍由 `AgentLoop` 分散调用，缺少统一的异步 pipeline。
+- OpenAI-compatible provider 仍需确认是否使用异步 SDK。
+- `clone_repo` 和执行环境准备中的外部进程仍需迁移到 asyncio subprocess。
+- 持久化、task service、background supervisor 仍存在同步锁或线程池模型。
+- MCP 尚未接入。
+
 ## 不可破坏的协议顺序
 
 异步化不等于把所有步骤并发执行。以下顺序是 Agent 协议和当前语义的一部分，必须保留。
@@ -90,20 +107,15 @@ hooks 顺序：
 
 ## 当前同步边界
 
-需要重构的同步边界：
+当前剩余需要重构的同步边界：
 
-- `nano_agent/agent.py`：`NanoAgent.run()` 是同步顶层入口。
-- `nano_agent/loop.py`：`AgentLoop.run()` 是同步主循环，直接调用 `llm.complete()`、`tool.invoke()` 和同步 hooks。
-- `nano_agent/services/llm.py`：`LLMClient.complete()` 是同步协议。
-- `nano_agent/services/openai_compatible.py`：使用同步 OpenAI SDK。
-- `nano_agent/tools/base.py`：`RuntimeTool.invoke()` 和 `RuntimeTool.run()` 是同步工具接口。
-- `nano_agent/tools/run_command.py`：使用 `subprocess.Popen`。
+- `nano_agent/loop.py`：hook 调用逻辑仍分散在 loop 内，缺少统一 pipeline。
+- `nano_agent/services/openai_compatible.py`：需要迁移或确认使用异步 OpenAI-compatible client。
 - `nano_agent/tools/clone_repo.py`：使用 `subprocess.run`。
 - `nano_agent/runtime/environment.py`：执行环境准备中存在同步子进程调用。
-- `nano_agent/context/compactor.py`：摘要压缩使用同步 LLM 调用，同步写 transcript、checkpoint 和 compaction record。
 - `nano_agent/background/supervisor.py`：使用 `ThreadPoolExecutor`、`RLock` 和 `Condition`。
 - `nano_agent/background/store.py` 与 `nano_agent/tasks/service.py`：使用线程锁保护状态。
-- `tests/`：大量 fake LLM、fake tool 和 loop 测试基于同步接口。
+- `nano_agent/persistence/` 与 compactor 持久化路径：仍以同步文件写入为主，需要明确 async 边界，同时保持原子写语义。
 
 ## 迁移原则
 
@@ -200,7 +212,81 @@ hooks 顺序：
 - 协议消息顺序保持稳定。
 - 有副作用或有顺序依赖的工具不会被错误并发。
 
-## Step 4：迁移 LLM client 和重试
+## Step 4：迁移工具内部阻塞 I/O
+
+状态：已完成一部分。
+
+涉及模块：
+
+- `nano_agent/tools/read_file.py`
+- `nano_agent/tools/list_files.py`
+- `nano_agent/tools/grep.py`
+- `nano_agent/tools/run_command.py`
+- `tests/tools/test_read_file.py`
+- `tests/tools/test_run_command.py`
+
+重构内容：
+
+- `run_command` 使用 `asyncio.create_subprocess_exec()`，保留进程组、timeout、stdout/stderr tail、exit code 和超时清理语义。
+- `read_file`、`list_files`、`grep` 将同步文件 I/O 主体移入 `_run_sync()`，由 `asyncio.to_thread()` 调用。
+- 保持 workspace containment、输入校验、权限级别和 `ToolResult` 格式不变。
+- 增加 event loop 不被工具等待阻塞的测试。
+
+重构后的结果：
+
+- Step 3 的安全 tool batch 并发不再被 `run_command` 进程等待或只读文件工具的同步 I/O 长时间阻塞。
+- 文件系统 I/O 仍保留同步实现，但同步成本被隔离到 thread boundary。
+- 后续剩余工具迁移可以按同一模式处理。
+
+剩余工作：
+
+- `clone_repo` 仍需迁移到 asyncio subprocess。
+- `runtime/environment.py` 中涉及外部命令或虚拟环境准备的路径仍需迁移。
+- `edit_file`、task tools、delegate tools、activate skill、finish_run 等需要复查是否存在长时间同步 I/O，并按风险决定是否使用 `asyncio.to_thread()`。
+
+## Step 5：抽取 HookPipeline
+
+涉及模块：
+
+- `nano_agent/hooks/base.py`
+- `nano_agent/hooks/permission.py`
+- `nano_agent/hooks/console.py`
+- `nano_agent/hooks/llm_metrics.py`
+- `nano_agent/hooks/registry.py`
+- `nano_agent/loop.py`
+- `tests/test_agent_loop.py`
+- `tests/test_audit_hook.py`
+- `tests/test_console_hook.py`
+- `tests/test_llm_metrics_hook.py`
+- `tests/test_permissions.py`
+
+重构内容：
+
+- 新增统一的 `HookPipeline`，封装：
+  - `before_llm_call`
+  - `after_llm_call`
+  - `before_tool_call`
+  - `after_tool_call`
+  - `on_error`
+- `AgentLoop` 不再直接遍历 `self.hooks`，只调用 pipeline。
+- 明确 hook 注入消息语义：
+  - `before_llm_call` 立即写入 conversation，影响本轮 LLM 输入。
+  - `after_llm_call` 延迟到 assistant/tool 协议消息之后写入。
+  - tool 前后 hook 消息按 LLM `tool_uses` 顺序收集和回填。
+- 并发 tool batch 中，hook 仍保持串行和确定顺序：
+  - before hooks 串行。
+  - tool invoke 可并发。
+  - after hooks 串行。
+- `on_error` 按注册顺序执行；hook 自身错误不得覆盖原始业务异常，除非明确设计为 fatal。
+- `PermissionDeniedError` 继续中断工具执行，被拒绝的 tool call 不进入 `tool.invoke()`。
+
+重构后的结果：
+
+- `AgentLoop` 更专注于 LLM、tool batch、compaction 和 finish 协议调度。
+- hook 执行顺序、错误传播和注入消息位置集中在一个模块维护。
+- 后续指标、权限、审计、MCP tracing 不需要继续扩张 loop 代码。
+
+## Step 6：迁移 LLM provider 到真正异步网络调用
 
 涉及模块：
 
@@ -212,51 +298,49 @@ hooks 顺序：
 
 重构内容：
 
-- OpenAI-compatible provider 改用异步 SDK。
-- `complete()` 变为 async 实现。
+- OpenAI-compatible provider 改用异步 SDK 或异步 HTTP client。
+- `complete()` 保持 async 协议，内部不再通过同步 client 阻塞 event loop。
 - 错误归一化逻辑保持一致。
-- transient retry 使用 async sleep。
-- 确认 usage、tool call parsing、invalid response 处理与当前行为一致。
+- transient retry 继续使用 async sleep。
+- 确认 usage、tool call parsing、invalid response、max_tokens handling 与当前行为一致。
 
 重构后的结果：
 
 - LLM 网络调用不阻塞 event loop。
 - AgentLoop 可以在等待 LLM 时让出调度权。
-- provider 层不再保留同步 client。
+- provider 层不再保留同步网络调用路径。
 
-## Step 5：迁移内置工具
+## Step 7：迁移剩余内置工具和运行环境准备
 
 涉及模块：
 
-- `nano_agent/tools/read_file.py`
-- `nano_agent/tools/list_files.py`
-- `nano_agent/tools/grep.py`
-- `nano_agent/tools/edit_file.py`
-- `nano_agent/tools/run_command.py`
 - `nano_agent/tools/clone_repo.py`
+- `nano_agent/tools/edit_file.py`
 - `nano_agent/tools/tasks.py`
 - `nano_agent/tools/delegate_task.py`
 - `nano_agent/tools/activate_skill.py`
 - `nano_agent/tools/finish_run.py`
 - `nano_agent/runtime/environment.py`
 - `tests/tools/`
+- `tests/runtime/`
 
 重构内容：
 
-- 所有工具 `run()` 改为 async。
-- `run_command` 使用 `asyncio.create_subprocess_exec()`，保留进程组、timeout、stdout/stderr tail 和超时清理语义。
-- `clone_repo` 使用异步子进程执行 git。
-- `runtime/environment.py` 中需要执行外部命令的逻辑改为 async。
-- 文件读写工具先以 async 函数承载逻辑；如果使用同步文件 I/O，必须保证调用点清晰，后续可替换为异步文件 I/O。
-- 根据工具副作用设置并发元数据。
+- `clone_repo` 使用 `asyncio.create_subprocess_exec()` 执行 git，并保留 timeout、stderr/stdout tail、工作区空目录约束和错误分类。
+- `runtime/environment.py` 中需要执行外部命令的逻辑改为 async subprocess。
+- 对文件写入、skill 读取、task 工具和 delegate 工具进行阻塞点审计：
+  - 短文件 I/O 可暂时保留同步实现。
+  - 可能长时间运行的文件 I/O 或目录遍历放入 `asyncio.to_thread()`。
+  - 状态服务调用等到 task service 异步化后改为 await。
+- 根据工具副作用复查并发元数据。
 
 重构后的结果：
 
-- 所有内置工具由 async AgentLoop 直接 await。
-- 外部进程不会阻塞 event loop。
+- 内置工具不会在长时间子进程或重 I/O 上阻塞 event loop。
 - 工具权限、workspace containment、输入校验和 `ToolResult` 格式不变。
+- 为 task service 和 background supervisor 的 async 化清理工具层依赖。
 
-## Step 6：迁移 ContextCompactor
+## Step 8：整理 ContextCompactor 和持久化异步边界
 
 涉及模块：
 
@@ -267,7 +351,7 @@ hooks 顺序：
 
 重构内容：
 
-- 将 `prepare()`、`compact_history()`、`reactive_compact()`、`_summarize()` 改为 async。
+- 确认 `prepare()`、`compact_history()`、`reactive_compact()`、`_summarize()` 已走 async 调用路径。
 - `prepare()` 内部严格保持顺序：
   - `tool_result_budget`
   - `snip_compact`
@@ -277,15 +361,18 @@ hooks 顺序：
 - `_summarize()` 调用异步 LLM client。
 - `compact_history` attempts 串行执行。
 - `reactive_compact` 只从 LLM prompt-too-long recovery 路径调用。
-- transcript、checkpoint、tool result 持久化继续保持原子写；如改成异步写，必须保留临时文件加 `os.replace` 的原子模式。
+- transcript、checkpoint、tool result 持久化继续保持原子写。
+- 如将同步持久化移出 event loop，必须保留临时文件加 `os.replace` 的原子模式。
+- 不允许为了 async 化降低 tool result 落盘的完整性校验和恢复语义。
 
 重构后的结果：
 
 - 上下文压缩可以在 async AgentLoop 中顺序执行。
 - 三层压缩和 LLM 摘要压缩不会被错误并发。
 - prompt-too-long 恢复路径保持当前语义。
+- 持久化阻塞点有明确边界，后续可统一迁移。
 
-## Step 7：迁移持久化和 TaskService
+## Step 9：迁移持久化和 TaskService
 
 涉及模块：
 
@@ -312,7 +399,7 @@ hooks 顺序：
 - 不再依赖线程锁。
 - DAG 依赖和状态机语义保持不变。
 
-## Step 8：多 Agent 调度迁移到 asyncio
+## Step 10：多 Agent 调度迁移到 asyncio
 
 涉及模块：
 
@@ -342,7 +429,7 @@ hooks 顺序：
 - 主 Agent 等待后台完成不阻塞线程。
 - job 状态、task 状态、事件投递和 observed 语义保持稳定。
 
-## Step 9：顶层入口和 CLI 异步化
+## Step 11：顶层入口和资源生命周期复查
 
 涉及模块：
 
@@ -354,10 +441,10 @@ hooks 顺序：
 
 重构内容：
 
-- `NanoAgent.run()` 改为 async 方法，或重命名为 `run_async()` 后统一更新调用方。项目内不保留同步顶层入口。
-- CLI 使用 `asyncio.run(...)` 启动。
-- 顶层异常处理、supervisor shutdown、report 保存、run summary 保存全部 await。
+- 确认 `NanoAgent.run()`、CLI 入口和实验脚本已统一走 async 路径。
+- 顶层异常处理、supervisor shutdown、report 保存、run summary 保存全部使用 await 或明确的 async boundary。
 - 运行结束时确保 MCP client、subagent task、外部进程和后台资源被关闭。
+- 删除任何为旧同步接口保留的生产入口。
 
 重构后的结果：
 
@@ -365,7 +452,7 @@ hooks 顺序：
 - 顶层资源生命周期明确。
 - 同步入口从生产代码中移除。
 
-## Step 10：MCP 按 async-first 接入
+## Step 12：MCP 按 async-first 接入
 
 涉及模块：
 
@@ -389,7 +476,7 @@ hooks 顺序：
 - MCP 工具可以参与 AgentLoop 的工具 batch 调度。
 - stdio server 和 HTTP session 生命周期由 async 资源管理统一控制。
 
-## Step 11：删除同步残留
+## Step 13：删除同步残留
 
 涉及模块：
 
@@ -442,13 +529,15 @@ hooks 顺序：
 1. 替换核心接口为 async。
 2. 重构 AgentLoop 为异步主循环。
 3. 实现工具调用并发调度。
-4. 迁移 LLM client 和重试。
-5. 迁移内置工具。
-6. 迁移 ContextCompactor。
-7. 迁移持久化和 TaskService。
-8. 多 Agent 调度迁移到 asyncio。
-9. 顶层入口和 CLI 异步化。
-10. MCP 按 async-first 接入。
-11. 删除同步残留。
+4. 迁移工具内部阻塞 I/O。
+5. 抽取 HookPipeline。
+6. 迁移 LLM provider 到真正异步网络调用。
+7. 迁移剩余内置工具和运行环境准备。
+8. 整理 ContextCompactor 和持久化异步边界。
+9. 迁移持久化和 TaskService。
+10. 多 Agent 调度迁移到 asyncio。
+11. 顶层入口和资源生命周期复查。
+12. MCP 按 async-first 接入。
+13. 删除同步残留。
 
 不建议把“工具并发”和“多 Agent 迁移”放到同一步。工具并发属于单轮 LLM response 内的 batch 调度问题，多 Agent 迁移属于后台 job 生命周期和状态一致性问题，两个问题应分别验证。

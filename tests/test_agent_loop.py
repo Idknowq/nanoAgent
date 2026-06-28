@@ -111,8 +111,33 @@ class RecordingHook(NoOpHook):
 class ReminderHook(NoOpHook):
     async def before_tool_call(self, context, tool, tool_use):  # type: ignore[no-untyped-def]
         return HookResult(
-            injected_messages=[AgentMessage(role="system", content=f"Reminder for {tool_use.name}")]
+            injected_messages=[
+                AgentMessage(role="system", content=f"Reminder for {tool_use.name}")
+            ]
         )
+
+
+class FailingBeforeLLMHook(NoOpHook):
+    """Hook that fails before the LLM request and records error notification."""
+
+    def __init__(self) -> None:
+        self.errors: list[str] = []  # Error messages observed through on_error.
+
+    async def before_llm_call(self, context, messages, tools):  # type: ignore[no-untyped-def]
+        del context, messages, tools
+        raise RuntimeError("before llm failed")
+
+    async def on_error(self, context, error):  # type: ignore[no-untyped-def]
+        del context
+        self.errors.append(str(error))
+
+
+class FailingOnErrorHook(NoOpHook):
+    """Hook whose error callback fails and must not replace the original error."""
+
+    async def on_error(self, context, error):  # type: ignore[no-untyped-def]
+        del context, error
+        raise RuntimeError("on_error failed")
 
 
 class OrderedTool(RuntimeTool):
@@ -976,6 +1001,35 @@ async def test_agent_loop_calls_hooks(tmp_path: Path) -> None:
     assert hook.duration_seconds >= 0
     assert context.current_step == 2
     assert context.max_steps == config.max_steps
+
+
+async def test_agent_loop_reports_hook_error_without_replacing_original(
+    tmp_path: Path,
+) -> None:
+    config = AgentConfig(workspace_root=tmp_path)
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
+        config=config,
+    )
+    reporting_hook = FailingBeforeLLMHook()
+    loop = AgentLoop(
+        config=config,
+        llm=AlwaysTruncatedLLM(),  # type: ignore[arg-type]
+        tools=ToolRegistry(),
+        context=context,
+        hooks=[FailingOnErrorHook(), reporting_hook],
+    )
+
+    with pytest.raises(RuntimeError, match="before llm failed"):
+        await loop.run(
+            RunSummary(run_id="test", repo_url=context.repo_url),
+            [AgentMessage(role="user", content="start")],
+        )
+
+    assert reporting_hook.errors == ["before llm failed"]
 
 
 async def test_agent_loop_appends_hook_reminders_after_tool_results(tmp_path: Path) -> None:
