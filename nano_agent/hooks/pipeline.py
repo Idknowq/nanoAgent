@@ -6,59 +6,60 @@ from nano_agent.tools.base import RuntimeTool, ToolContext, ToolResult, ToolSpec
 
 
 class HookPipeline:
-    """Run agent hooks in a single ordered async execution chain."""
+    """Run agent hooks in a single ordered async execution chain.
+
+    Each method appends injected messages directly into the caller-supplied
+    target list so that hook output produced before an exception is not lost.
+    """
 
     def __init__(self, hooks: list[AgentHook] | None = None) -> None:
         self.hooks = hooks or []  # Hook instances executed in registration order.
 
     async def before_llm_call(
         self,
+        target: list[AgentMessage],
         context: ToolContext,
         messages: list[AgentMessage],
         tools: list[ToolSpec],
-    ) -> list[AgentMessage]:
-        """Run pre-LLM hooks and return messages that must enter the LLM request."""
-        injected: list[AgentMessage] = []
+    ) -> None:
+        """Run pre-LLM hooks, appending messages to target before the LLM request."""
         for hook in self.hooks:
-            self._extend(injected, await hook.before_llm_call(context, messages, tools))
-        return injected
+            self._extend(target, await hook.before_llm_call(context, messages, tools))
 
     async def after_llm_call(
         self,
+        target: list[AgentMessage],
         context: ToolContext,
         response: LLMResponse,
-    ) -> list[AgentMessage]:
-        """Run post-LLM hooks and return messages deferred until protocol-safe insertion."""
-        injected: list[AgentMessage] = []
+    ) -> None:
+        """Run post-LLM hooks, appending messages to target for deferred insertion."""
         for hook in self.hooks:
-            self._extend(injected, await hook.after_llm_call(context, response))
-        return injected
+            self._extend(target, await hook.after_llm_call(context, response))
 
     async def before_tool_call(
         self,
+        target: list[AgentMessage],
         context: ToolContext,
         tool: RuntimeTool,
         tool_use: ToolUseRequest,
-    ) -> list[AgentMessage]:
-        """Run pre-tool hooks before invoking one runtime tool."""
-        injected: list[AgentMessage] = []
+    ) -> None:
+        """Run pre-tool hooks, appending messages to target before tool invocation."""
         for hook in self.hooks:
-            self._extend(injected, await hook.before_tool_call(context, tool, tool_use))
-        return injected
+            self._extend(target, await hook.before_tool_call(context, tool, tool_use))
 
     async def after_tool_call(
         self,
+        target: list[AgentMessage],
         context: ToolContext,
         tool: RuntimeTool,
         tool_use: ToolUseRequest,
         result: ToolResult,
         duration_seconds: float,
-    ) -> list[AgentMessage]:
-        """Run post-tool hooks after one runtime tool has completed."""
-        injected: list[AgentMessage] = []
+    ) -> None:
+        """Run post-tool hooks, appending messages to target after tool execution."""
         for hook in self.hooks:
             self._extend(
-                injected,
+                target,
                 await hook.after_tool_call(
                     context,
                     tool,
@@ -67,7 +68,6 @@ class HookPipeline:
                     duration_seconds,
                 ),
             )
-        return injected
 
     async def on_error(self, context: ToolContext, error: Exception) -> None:
         """Notify hooks about an error without replacing the original exception."""

@@ -51,7 +51,6 @@ class _PreparedToolInvocation:
 
     tool_use: ToolUseRequest  # Original LLM tool request.
     tool: RuntimeTool  # Runtime tool instance selected from the registry.
-    started: float  # Monotonic timestamp used for duration accounting.
     hook_messages: list[AgentMessage] = field(default_factory=list)  # Deferred hook output.
 
 
@@ -372,16 +371,14 @@ class AgentLoop:
             for tool_use in tool_uses:
                 tool = self.tools.get(tool_use.name)
                 self._raise_if_cancelled()
-                started = time.monotonic()
                 hook_messages: list[AgentMessage] = []
-                hook_messages.extend(
-                    await self.hook_pipeline.before_tool_call(self.context, tool, tool_use)
+                await self.hook_pipeline.before_tool_call(
+                    hook_messages, self.context, tool, tool_use
                 )
                 prepared.append(
                     _PreparedToolInvocation(
                         tool_use=tool_use,
                         tool=tool,
-                        started=started,
                         hook_messages=hook_messages,
                     )
                 )
@@ -390,8 +387,9 @@ class AgentLoop:
             raise
 
         async def invoke(prepared_call: _PreparedToolInvocation) -> tuple[ToolResult, float]:
+            started = time.monotonic()
             result = await prepared_call.tool.invoke(prepared_call.tool_use.input, self.context)
-            return result, time.monotonic() - prepared_call.started
+            return result, time.monotonic() - started
 
         tasks = [asyncio.create_task(invoke(prepared_call)) for prepared_call in prepared]
         try:
@@ -413,14 +411,13 @@ class AgentLoop:
                         result,
                         finish_is_exclusive=finish_is_exclusive,
                     )
-                prepared_call.hook_messages.extend(
-                    await self.hook_pipeline.after_tool_call(
-                        self.context,
-                        prepared_call.tool,
-                        prepared_call.tool_use,
-                        result,
-                        duration,
-                    )
+                await self.hook_pipeline.after_tool_call(
+                    prepared_call.hook_messages,
+                    self.context,
+                    prepared_call.tool,
+                    prepared_call.tool_use,
+                    result,
+                    duration,
                 )
                 self._raise_if_cancelled()
                 outcomes.append(
@@ -475,8 +472,8 @@ class AgentLoop:
         completion_report: CompletionReport | None = None
         try:
             self._raise_if_cancelled()
-            hook_messages.extend(
-                await self.hook_pipeline.before_tool_call(self.context, tool, tool_use)
+            await self.hook_pipeline.before_tool_call(
+                hook_messages, self.context, tool, tool_use
             )
             result = await tool.invoke(tool_use.input, self.context)
             if isinstance(tool, FinishRunTool) and result.success:
@@ -485,14 +482,13 @@ class AgentLoop:
                     finish_is_exclusive=finish_is_exclusive,
                 )
             duration = time.monotonic() - started
-            hook_messages.extend(
-                await self.hook_pipeline.after_tool_call(
-                    self.context,
-                    tool,
-                    tool_use,
-                    result,
-                    duration,
-                )
+            await self.hook_pipeline.after_tool_call(
+                hook_messages,
+                self.context,
+                tool,
+                tool_use,
+                result,
+                duration,
             )
             self._raise_if_cancelled()
         except Exception as exc:
@@ -715,10 +711,11 @@ class AgentLoop:
         self._raise_if_cancelled()
 
         try:
-            await self._append_messages(
-                messages,
-                await self.hook_pipeline.before_llm_call(self.context, messages, tool_specs),
+            before_llm_injected: list[AgentMessage] = []
+            await self.hook_pipeline.before_llm_call(
+                before_llm_injected, self.context, messages, tool_specs
             )
+            await self._append_messages(messages, before_llm_injected)
         except Exception as exc:
             await self.hook_pipeline.on_error(self.context, exc)
             raise
@@ -740,7 +737,7 @@ class AgentLoop:
 
         self.context.current_llm_duration_seconds = time.monotonic() - started
         try:
-            deferred.extend(await self.hook_pipeline.after_llm_call(self.context, response))
+            await self.hook_pipeline.after_llm_call(deferred, self.context, response)
         except Exception as exc:
             await self.hook_pipeline.on_error(self.context, exc)
             raise

@@ -75,6 +75,14 @@ class DenyingHook(NoOpHook):
         raise PermissionError("denied")
 
 
+class FailingBeforeLLMHook(NoOpHook):
+    """Hook that fails after earlier hooks may have injected messages."""
+
+    async def before_llm_call(self, context, messages, tools):  # type: ignore[no-untyped-def]
+        del context, messages, tools
+        raise RuntimeError("before llm failed")
+
+
 class FailingErrorHook(NoOpHook):
     """Hook whose error handler fails and must not replace the original error."""
 
@@ -106,13 +114,19 @@ async def test_hook_pipeline_preserves_order_and_injected_messages(tmp_path: Pat
     tool = PipelineTool()
     tool_use = ToolUseRequest(id="toolu_1", name=tool.name, input={})
 
-    before_llm = await pipeline.before_llm_call(context, [], [])
-    after_llm = await pipeline.after_llm_call(
+    before_llm: list[AgentMessage] = []
+    after_llm: list[AgentMessage] = []
+    before_tool: list[AgentMessage] = []
+    after_tool: list[AgentMessage] = []
+    await pipeline.before_llm_call(before_llm, context, [], [])
+    await pipeline.after_llm_call(
+        after_llm,
         context,
         LLMResponse(content="done", stop_reason="end_turn"),
     )
-    before_tool = await pipeline.before_tool_call(context, tool, tool_use)
-    after_tool = await pipeline.after_tool_call(
+    await pipeline.before_tool_call(before_tool, context, tool, tool_use)
+    await pipeline.after_tool_call(
+        after_tool,
         context,
         tool,
         tool_use,
@@ -140,9 +154,33 @@ async def test_hook_pipeline_propagates_permission_denial(tmp_path: Path) -> Non
     context = make_context(tmp_path)
     tool = PipelineTool()
     tool_use = ToolUseRequest(id="toolu_1", name=tool.name, input={})
+    injected: list[AgentMessage] = []
 
     with pytest.raises(PermissionError, match="denied"):
-        await HookPipeline([DenyingHook()]).before_tool_call(context, tool, tool_use)
+        await HookPipeline([DenyingHook()]).before_tool_call(
+            injected,
+            context,
+            tool,
+            tool_use,
+        )
+
+
+async def test_hook_pipeline_keeps_injected_messages_before_exception(tmp_path: Path) -> None:
+    events: list[str] = []
+    context = make_context(tmp_path)
+    target: list[AgentMessage] = []
+    pipeline = HookPipeline(
+        [
+            RecordingPipelineHook("first", events),
+            FailingBeforeLLMHook(),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="before llm failed"):
+        await pipeline.before_llm_call(target, context, [], [])
+
+    assert events == ["first:before_llm"]
+    assert [message.content for message in target] == ["first:before_llm"]
 
 
 async def test_hook_pipeline_on_error_does_not_replace_original_error(tmp_path: Path) -> None:
