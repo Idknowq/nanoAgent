@@ -28,11 +28,11 @@
 - Step 8：`ContextCompactor` 的大 tool result 处理、transcript 写入和 checkpoint 写入已建立 async 边界；压缩管线仍严格串行。
 - Step 9：`TaskService` 已提供 async API，task tools 已改为 await；`MessageStore` 的 AgentLoop 主写入路径已建立 async 边界。
 - Step 10：`BackgroundJobSupervisor` 已从线程池迁移到 `asyncio.Task`，delegate tools、completion hook、finish_run active-job 检查和 shutdown 路径已改为 async。
+- Step 11：顶层 config、prompt、report、summary 保存路径已建立 async boundary，CLI 和实验脚本统一通过 async 入口运行。
 
 仍未完成：
 
 - background store、subagent store、task store 仍使用同步文件 I/O，并通过 async 边界或内部线程锁隔离。
-- summary/report/prompt/config store 仍是同步持久化。
 - MCP 尚未接入。
 
 ## 不可破坏的协议顺序
@@ -118,7 +118,7 @@ hooks 顺序：
 - `nano_agent/background/store.py`：使用同步文件 I/O。
 - `nano_agent/subagents/store.py`：使用同步文件 I/O 和线程锁分配子 Agent 标识。
 - `nano_agent/tasks/service.py`：仍用 `RLock` 保护 `asyncio.to_thread()` 中执行的完整同步 TaskStore 事务。
-- summary/report/prompt/config store 仍以同步文件写入为主，需要按调用路径建立 async 边界。
+- summary/report/prompt/config store 仍保留同步实现，但顶层调用路径已有 async boundary。
 
 ## 迁移原则
 
@@ -450,7 +450,9 @@ hooks 顺序：
 - job 状态、task 状态、事件投递和 observed 语义保持稳定。
 - 多 Agent 之间只共享工作区和父级配置，不共享 active messages、compactor、message store 或 cancellation token。
 
-## Step 11：顶层入口和资源生命周期复查
+## Step 11：顶层入口和收尾持久化 async boundary 复查
+
+状态：已完成。
 
 涉及模块：
 
@@ -464,14 +466,17 @@ hooks 顺序：
 
 - 确认 `NanoAgent.run()`、CLI 入口和实验脚本已统一走 async 路径。
 - 顶层异常处理、supervisor shutdown、report 保存、run summary 保存全部使用 await 或明确的 async boundary。
-- 运行结束时确保 MCP client、subagent task、外部进程和后台资源被关闭。
+- config、prompt、report、summary 保存保留原子写语义，并通过 async wrapper 或 `asyncio.to_thread()` 移出 event loop。
+- 运行结束时确保 subagent task、外部进程和后台资源被关闭。
 - 删除任何为旧同步接口保留的生产入口。
+- MCP client 生命周期留到 Step 12 接入后统一管理。
 
 重构后的结果：
 
 - CLI 和生产入口走完整 async 路径。
 - 顶层资源生命周期明确。
-- 同步入口从生产代码中移除。
+- 顶层收尾持久化不会阻塞 event loop。
+- 同步 agent/loop 入口从生产代码中移除；CLI 作为进程入口保留 `asyncio.run()`。
 
 ## Step 12：MCP 按 async-first 接入
 

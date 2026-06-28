@@ -80,8 +80,8 @@ class NanoAgent:
                 run.artifacts["llm_calls"] = "llm_calls.jsonl"
             if self.config.audit_enabled:
                 run.artifacts["audit"] = "audit.jsonl"
-            self.config_store.save(run.run_id, run_dir, self.config)
-            self.workspace_manager.save_run_summary(run)
+            await self.config_store.save_async(run.run_id, run_dir, self.config)
+            await self.workspace_manager.save_run_summary_async(run)
             context = ToolContext(
                 run_id=run.run_id,
                 repo_url=repo_url,
@@ -142,7 +142,7 @@ class NanoAgent:
                     memories=self._load_memories(repo_url),
                 )
             )
-            self.prompt_store.save(run.run_id, run_dir, prompt_bundle)
+            await self.prompt_store.save_async(run.run_id, run_dir, prompt_bundle)
             message_store = MessageStore(run_dir)
             compactor = ContextCompactor(
                 config=self.config,
@@ -190,12 +190,12 @@ class NanoAgent:
                 remaining_risks=["No reliable completion status is available."],
             )
             run.status = RunStatus.FAILED
-        self.report_store.save(
+        await self.report_store.save_async(
             self.workspace_manager.run_dir(run.run_id),
             run,
             run.completion_report,
         )
-        self.workspace_manager.save_run_summary(run)
+        await self.workspace_manager.save_run_summary_async(run)
         return run
 
     def _skills_root(self) -> Path:

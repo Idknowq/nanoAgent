@@ -32,6 +32,11 @@ class WorkspaceManager:
     def save_run_summary(self, run: RunSummary) -> Path:
         return self.summary_store.save(self.run_dir(run.run_id), run)
 
+    async def save_run_summary_async(self, run: RunSummary) -> Path:
+        """Persist the run summary without blocking the event loop."""
+
+        return await self.summary_store.save_async(self.run_dir(run.run_id), run)
+
     def _repo_name_from_url(self, repo_url: str) -> str:
         raw_name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw_name).strip("-")

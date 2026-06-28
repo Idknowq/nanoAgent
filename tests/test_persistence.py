@@ -8,6 +8,7 @@ from nano_agent.config import AgentConfig
 from nano_agent.models import AgentMessage, LLMResponse, ToolUseRequest
 from nano_agent.persistence.config_store import ConfigStore
 from nano_agent.persistence.message_store import MessageStore
+from nano_agent.persistence.report_store import ReportStore
 
 
 class TodoThenFinishLLM:
@@ -110,6 +111,39 @@ async def test_message_store_append_many_async_does_not_block_event_loop(
     await task
 
     assert elapsed < 0.1
+
+
+async def test_nano_agent_final_report_save_does_not_block_event_loop(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    config = AgentConfig(
+        workspace_root=tmp_path / "workspaces",
+        runs_root=tmp_path / "runs",
+        console_progress_enabled=False,
+    )
+    original_save = ReportStore.save
+
+    def slow_save(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        time.sleep(0.15)
+        return original_save(self, *args, **kwargs)
+
+    monkeypatch.setattr(ReportStore, "save", slow_save)
+
+    task = asyncio.create_task(
+        NanoAgent(config, llm=TodoThenFinishLLM()).run(  # type: ignore[arg-type]
+            "https://example.com/repo.git",
+            "Inspect package metadata.",
+        )
+    )
+    await asyncio.sleep(0)
+    start = time.perf_counter()
+    await asyncio.sleep(0.01)
+    elapsed = time.perf_counter() - start
+    result = await task
+
+    assert elapsed < 0.1
+    assert result.status == "completed"
 
 
 async def test_nano_agent_persists_run_files_including_prompt_metadata(tmp_path: Path) -> None:

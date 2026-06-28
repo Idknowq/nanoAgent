@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -35,6 +36,16 @@ class ReportStore:
             if temporary_path is not None and temporary_path.exists():
                 temporary_path.unlink()
         return target
+
+    async def save_async(
+        self,
+        run_dir: Path,
+        run: RunSummary,
+        report: CompletionReport,
+    ) -> Path:
+        """Render and persist the report without blocking the event loop."""
+
+        return await asyncio.to_thread(self.save, run_dir, run, report)
 
     def render(self, run: RunSummary, report: CompletionReport) -> str:
         changed_files = self._list(report.changed_files, "None", code=True)

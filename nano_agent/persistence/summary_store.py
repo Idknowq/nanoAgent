@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from pathlib import Path
 
@@ -70,3 +71,8 @@ class SummaryStore:
         summary = PersistedRunSummary.from_run(run)
         atomic_write_json(target, summary.model_dump(mode="json"))
         return target
+
+    async def save_async(self, run_dir: Path, run: RunSummary) -> Path:
+        """Persist the run summary without blocking the event loop."""
+
+        return await asyncio.to_thread(self.save, run_dir, run)

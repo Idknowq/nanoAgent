@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,3 +31,8 @@ class ConfigStore:
         )
         atomic_write_json(target, snapshot.model_dump(mode="json"))
         return target
+
+    async def save_async(self, run_id: str, run_dir: Path, config: AgentConfig) -> Path:
+        """Persist the effective configuration without blocking the event loop."""
+
+        return await asyncio.to_thread(self.save, run_id, run_dir, config)
