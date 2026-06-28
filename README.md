@@ -28,8 +28,9 @@ Unlike a one-shot Q&A session, nanoAgent will:
 - 🔄 Retry on transient errors and compact context when it grows too large
 - 📋 Deliver a structured completion report with evidence, risks, and changed files
 
-Current phase: guarded tool-use loops with run persistence, cache-oriented prompt composition,
-and bounded one-level subagent delegation.
+Current phase: asyncio-based tool-use loops with run persistence, cache-oriented prompt
+composition, bounded one-level subagent delegation, and ongoing cleanup of remaining synchronous
+persistence boundaries.
 
 ---
 
@@ -37,13 +38,14 @@ and bounded one-level subagent delegation.
 
 | Feature | Description |
 |------|------|
+| ⚡ **Async Runtime** | Async LLM calls, tool invocation, hooks, subprocess execution, and subagent scheduling |
 | 🧠 **Tool-Use Loop** | LLM requests tools → execute → inject results → continue reasoning until done |
 | 🔧 **Rich Built-in Tools** | Repository cloning, file I/O, grep search, shell commands, code editing, task management |
 | 📦 **Isolated Runtime** | Per-run venv, sandboxed HOME / TMPDIR / cache directories |
 | 🗜️ **Multi-Layer Compaction** | Budget → Snip → Micro → LLM summary → Reactive, five-tier progressive reduction |
 | 🔄 **Resilient Recovery** | Exponential backoff for transients, bounded continuation for truncation, correction for invalid tool calls |
 | 🔌 **Extensible Hooks** | Permission, audit, metrics, skill injection — composable at each loop boundary |
-| 👥 **Subagent Delegation** | Synchronous & background task delegation, up to 2 concurrent read-only subagents |
+| 👥 **Subagent Delegation** | Background subagent jobs scheduled with `asyncio.Task`, up to 2 concurrent read-only subagents |
 | 📋 **Persistent Task Tracking** | Dependency graph (`blocked_by`), lifecycle state machine, background Job linkage |
 | 📝 **Structured Reports** | Every run produces `report.md` with problem, root cause, changed files, verification, and risks |
 | 🎯 **On-Demand Skills** | Built-in Python / Node / Django / GitHub Actions domain skills, activated by the model when needed |
@@ -108,9 +110,9 @@ When the run finishes, the terminal prints a compact summary. The full report li
 
 ```
 nano_agent/
-├── agent.py              # Top-level entry point — wires components and launches the loop
-├── loop.py               # Core tool-use loop engine with full error recovery
-├── cli.py                # Typer CLI entry point
+├── agent.py              # Async top-level entry point — wires components and launches the loop
+├── loop.py               # Async tool-use loop engine with error recovery
+├── cli.py                # Typer CLI entry point, using asyncio.run at the process boundary
 ├── config.py             # AgentConfig — single source of truth for all runtime parameters
 ├── models.py             # Pydantic data models: messages, responses, run state
 ├── workspace.py          # Isolated workspace management and run summaries
@@ -144,12 +146,12 @@ nano_agent/
 │   ├── compactor.py      #   Five-layer compaction pipeline + persistence
 │   └── state.py          #   Compaction state builder
 ├── subagents/            # Subagent system
-│   ├── manager.py        #   Subagent creation & synchronous execution
+│   ├── manager.py        #   Subagent creation and async execution
 │   ├── context.py        #   Subagent context builder
 │   ├── models.py         #   Subagent data models
 │   └── store.py          #   Subagent state persistence
 ├── background/           # Background job scheduling
-│   ├── supervisor.py     #   Thread-pool scheduler with bounded concurrency
+│   ├── supervisor.py     #   asyncio.Task scheduler with bounded concurrency
 │   ├── hook.py           #   Completion notification hook
 │   ├── cancellation.py   #   Cooperative cancellation token
 │   └── store.py          #   Job snapshot persistence
@@ -247,7 +249,7 @@ Each run stores artifacts under `.nano/runs/<run_id>/`:
 .nano/runs/20240601120000/
 ├── summary.json              # Machine-readable run summary
 ├── messages.jsonl            # Full append-only conversation stream
-├── promt.json                # Prompt assembly metadata
+├── prompt.json               # Prompt assembly metadata
 ├── report.md                 # Structured final report
 ├── llm_calls.jsonl           # Per-call LLM metrics (optional)
 ├── audit.jsonl               # Tool call audit trail (optional)
@@ -281,6 +283,22 @@ User request → Prompt assembly → LLM call
 6. **Context Compaction** — if approaching the token budget, apply progressive compaction
 7. **Result Injection** — append tool output to conversation history, continue the loop
 8. **Termination** — the model calls `finish_run` with a structured completion report
+
+### Async Execution Model
+
+nanoAgent's production control flow is async-first:
+
+- `NanoAgent.run()` and `AgentLoop.run()` are async entry points.
+- LLM providers use async network clients.
+- Runtime tools and hooks expose async interfaces.
+- `run_command`, repository cloning, and runtime environment setup use async subprocess APIs.
+- Safe tool calls from the same LLM response can run concurrently while preserving tool-result order.
+- Background subagents are scheduled as `asyncio.Task` instances with independent contexts,
+  compactors, message stores, and cancellation tokens.
+
+Some file-backed stores still use temporary async boundaries around synchronous atomic writes.
+Step 12 of the refactor plan tracks removing those remaining synchronous persistence residues
+without changing artifact formats or recovery semantics.
 
 ---
 
