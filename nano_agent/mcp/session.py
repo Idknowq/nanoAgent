@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from nano_agent.mcp.jsonrpc import JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
-from nano_agent.mcp.models import MCPInitializeResult, MCPServerConfig, MCPToolDefinition
+from nano_agent.mcp.models import (
+    MCPInitializeResult,
+    MCPServerConfig,
+    MCPToolCallResult,
+    MCPToolDefinition,
+)
 from nano_agent.mcp.transport import MCPProtocolError, StdioMCPTransport
 
 
@@ -66,6 +71,26 @@ class MCPClientSession:
         if not isinstance(tools, list):
             raise MCPProtocolError("MCP tools/list result requires tools list")
         return [self._parse_tool(tool) for tool in tools]
+
+    async def call_tool(
+        self,
+        tool: MCPToolDefinition,
+        arguments: dict[str, Any],
+    ) -> MCPToolCallResult:
+        """Call one remote MCP tool by its server-local name."""
+        if not self._initialized:
+            raise MCPSessionNotInitializedError("MCP session must be initialized before tools/call")
+        if tool.server_name != self._server.name:
+            raise MCPProtocolError("MCP tool belongs to a different server namespace")
+        response = await self._request(
+            "tools/call",
+            {
+                "name": tool.remote_name,
+                "arguments": arguments,
+            },
+        )
+        result = self._require_result(response, "tools/call")
+        return self._parse_tool_call_result(result)
 
     async def shutdown(self) -> None:
         """Shutdown the underlying transport."""
@@ -131,3 +156,15 @@ class MCPClientSession:
             )
         except ValueError as exc:
             raise MCPProtocolError("MCP tool name is not namespace-safe") from exc
+
+    def _parse_tool_call_result(self, result: dict[str, Any]) -> MCPToolCallResult:
+        """Parse an MCP tools/call result."""
+        content = result.get("content", [])
+        if not isinstance(content, list):
+            raise MCPProtocolError("MCP tools/call content must be a list")
+        if not all(isinstance(item, dict) for item in content):
+            raise MCPProtocolError("MCP tools/call content entries must be objects")
+        is_error = result.get("isError", False)
+        if not isinstance(is_error, bool):
+            raise MCPProtocolError("MCP tools/call isError must be a boolean")
+        return MCPToolCallResult(content=content, is_error=is_error, raw=result)

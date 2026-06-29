@@ -75,3 +75,11 @@ class MCPToolDefinition(BaseModel):
         if self.tool_name != expected:
             raise ValueError(f"MCP tool name must be {expected}")
         return self
+
+
+class MCPToolCallResult(BaseModel):
+    """Result returned from an MCP tools/call request."""
+
+    content: list[dict[str, Any]] = Field(default_factory=list)  # MCP content blocks.
+    is_error: bool = False  # Whether the MCP server marked the tool result as an error.
+    raw: dict[str, Any] = Field(default_factory=dict)  # Original tools/call result.

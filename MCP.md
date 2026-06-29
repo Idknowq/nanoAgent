@@ -109,6 +109,26 @@
 
 下一步进入 `tools/call` adapter，将 MCP tool 调用接入 async `RuntimeTool.run()`。
 
+### Step 4：tools/call adapter
+
+状态：已完成。
+
+本步实现 MCP tool 执行桥接，但仍不接入默认 `ToolRegistry`、不改 AgentLoop、不写 GitHub API 调用、不 hardcode GitHub 工具。
+
+已完成内容：
+
+- `MCPClientSession` 新增 `call_tool()`，通过 JSON-RPC `tools/call` 调用远端 MCP tool。
+- `tools/call` 发送给 MCP server 的名称使用远端 tool name，例如 `search_issues`，不发送 `github.search_issues`。
+- 新增 `MCPToolCallResult`，保存 MCP content blocks、`isError` 和原始 result。
+- 新增 `MCPToolAdapter`，把一个 `MCPToolDefinition` 包装为 nanoAgent `RuntimeTool`。
+- adapter 使用 namespaced tool name，例如 `github.search_issues`，并继承 MCP `inputSchema`。
+- MCP tool 成功结果转换为 `ToolResult(success=True)`。
+- MCP `isError=true` 转换为 `mcp_tool_error`。
+- JSON-RPC remote error、protocol error 和 transport error 会转换为对应 `ToolResult.failure`。
+- 使用 mock MCP server 覆盖远端 tool 调用、错误结果、JSON-RPC error、未初始化调用和 namespace 不匹配。
+
+下一步进入权限分级、namespace 策略、并发元数据和 registry 接入。
+
 ## GitHub MCP 接入策略
 
 GitHub 是第一个具体 MCP provider，但不应把 GitHub 逻辑写死到 MCP 核心层。GitHub 接入应建立在通用 MCP 基础设施之上。

@@ -86,18 +86,18 @@ class ToolInput(BaseModel):
 class RuntimeTool(ABC):
     """Agent loop 可直接调用的运行时工具接口。"""
 
-    name: ClassVar[str]  # 工具唯一名称。
-    description: ClassVar[str]  # 工具用途说明。
-    approval_level: ClassVar[ApprovalLevel] = ApprovalLevel.READ  # 工具默认权限等级。
-    input_schema: ClassVar[dict[str, Any]] = {}  # 暴露给 LLM 的 JSON Schema 参数结构。
-    category: ClassVar[str] = "general"  # 工具分类。
-    enabled: ClassVar[bool] = True  # 工具是否默认可用。
-    requires_workspace: ClassVar[bool] = False  # 工具是否依赖当前工作区。
-    workspace_must_exist: ClassVar[bool] = True  # 调用前工作区是否必须已存在。
-    is_mutating: ClassVar[bool] = False  # 工具是否可能修改环境或外部状态。
-    can_run_concurrently: ClassVar[bool] = False  # 是否允许与同组安全工具并发执行。
-    conflict_group: ClassVar[str | None] = None  # 并发冲突域；不同冲突域不放入同一批次。
-    requires_exclusive_execution: ClassVar[bool] = False  # 是否必须独占当前工具批次。
+    name: str  # 工具唯一名称；内置工具通常用类属性，动态工具可用实例属性。
+    description: str  # 工具用途说明。
+    approval_level: ApprovalLevel = ApprovalLevel.READ  # 工具默认权限等级。
+    input_schema: dict[str, Any] = {}  # 暴露给 LLM 的 JSON Schema 参数结构。
+    category: str = "general"  # 工具分类。
+    enabled: bool = True  # 工具是否默认可用。
+    requires_workspace: bool = False  # 工具是否依赖当前工作区。
+    workspace_must_exist: bool = True  # 调用前工作区是否必须已存在。
+    is_mutating: bool = False  # 工具是否可能修改环境或外部状态。
+    can_run_concurrently: bool = False  # 是否允许与同组安全工具并发执行。
+    conflict_group: str | None = None  # 并发冲突域；不同冲突域不放入同一批次。
+    requires_exclusive_execution: bool = False  # 是否必须独占当前工具批次。
     input_model: ClassVar[type[BaseModel] | None] = None  # 工具运行时输入校验模型。
 
     async def invoke(self, input_data: dict[str, Any], context: ToolContext) -> ToolResult:

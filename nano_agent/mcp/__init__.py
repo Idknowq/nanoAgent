@@ -1,6 +1,7 @@
 from nano_agent.mcp.models import (
     MCPInitializeResult,
     MCPServerConfig,
+    MCPToolCallResult,
     MCPToolDefinition,
     MCPTransportType,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "MCPServerConfig",
     "MCPSessionError",
     "MCPSessionNotInitializedError",
+    "MCPToolCallResult",
     "MCPToolDefinition",
     "MCPTransportClosedError",
     "MCPTransportError",
