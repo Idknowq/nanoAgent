@@ -146,6 +146,21 @@
 
 下一步使用最小 mock MCP server 做更接近真实运行的集成测试，然后再接 GitHub MCP server 只读 toolset。
 
+### Step 6：mock MCP server 集成测试
+
+状态：已完成。
+
+本步使用最小 mock MCP server 验证完整 stdio MCP tool lifecycle，不接真实 GitHub MCP server、不读取 token、不改 AgentLoop 自动挂载。
+
+已完成内容：
+
+- 新增端到端集成测试，覆盖 `MCPServerConfig`、`StdioMCPTransport`、`MCPClientSession.initialize()`、`notifications/initialized`、`tools/list`、`build_mcp_tool_registry()`、`MCPToolAdapter.invoke()` 和 `tools/call`。
+- mock server 要求收到 `notifications/initialized` 后才允许 `tools/list` 和 `tools/call`，贴近真实 MCP server 生命周期。
+- 集成测试确认 registry 能暴露 `mock.search_issues`，并能通过 adapter 得到 `ToolResult(success=True)`。
+- 集成测试确认 MCP tool spec 保留 `category=mcp`、`approval_level=READ`、`can_run_concurrently=True` 和 `mcp:<server>` conflict group。
+
+下一步接入 GitHub MCP server，先使用 stdio 模式和只读 toolset 做 smoke test。
+
 ## GitHub MCP 接入策略
 
 GitHub 是第一个具体 MCP provider，但不应把 GitHub 逻辑写死到 MCP 核心层。GitHub 接入应建立在通用 MCP 基础设施之上。
