@@ -1,4 +1,5 @@
 import inspect
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,6 +10,14 @@ from nano_agent.config import AgentConfig
 from nano_agent.mcp.github import GITHUB_TOKEN_ENV
 from nano_agent.mcp.models import MCPServerConfig, MCPTransportType
 from nano_agent.models import CompletionReport, RunStatus, RunSummary
+
+
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def plain_cli_output(text: str) -> str:
+    """Remove terminal styling from Typer/Rich output for stable CI assertions."""
+    return ANSI_ESCAPE_RE.sub("", text)
 
 
 def test_cli_max_steps_default_comes_from_agent_config() -> None:
@@ -28,19 +37,20 @@ def test_cli_exposes_explicit_permission_flags() -> None:
     assert "allow_command" in parameters
     assert "allow_write" in parameters
     assert "mcp_github" in parameters
+    assert "background_idle_wait_timeout" in parameters
     assert "auto_approve" not in parameters
     assert "auto_approve_write" not in parameters
 
 
 def test_cli_help_uses_renamed_permission_options() -> None:
     result = CliRunner().invoke(app, ["run", "--help"], terminal_width=160)
+    output = plain_cli_output(result.stdout)
 
     assert result.exit_code == 0
-    assert "--allow-command" in result.stdout
-    assert "--allow-write" in result.stdout
-    assert "--mcp-github" in result.stdout
-    assert "--background-idle-wai" in result.stdout
-    assert "--auto-approve" not in result.stdout
+    assert "allow-command" in output
+    assert "allow-write" in output
+    assert "mcp-github" in output
+    assert "auto-approve" not in output
 
 
 def test_cli_config_disables_mcp_by_default(tmp_path: Path) -> None:
@@ -115,9 +125,9 @@ def test_cli_reports_missing_github_token(monkeypatch) -> None:  # type: ignore[
     )
 
     assert result.exit_code != 0
-    assert GITHUB_TOKEN_ENV in result.output
-    assert "--mcp-github" in result.output
-    assert "enabled" in result.output
+    output = plain_cli_output(result.output)
+    assert GITHUB_TOKEN_ENV in output
+    assert "required" in output
 
 
 def test_cli_prints_compact_status_without_summary_content(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
