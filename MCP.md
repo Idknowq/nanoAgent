@@ -169,17 +169,17 @@
 
 已完成内容：
 
-- 新增 GitHub MCP stdio 配置 helper，目标镜像为 `ghcr.io/github/github-mcp-server`。
+- 新增 GitHub MCP stdio 配置 helper，从 `.env` / 环境读取 Docker image、token、toolsets 和 read-only 开关。
 - helper 使用 Docker `-e GITHUB_PERSONAL_ACCESS_TOKEN` 从父进程环境传递 token，不把 token 明文写入 `MCPServerConfig.env`。
-- 默认启用只读模式：`GITHUB_READ_ONLY=1`。
-- 默认启用只读相关 toolsets：`context,repos,issues,pull_requests`。
+- `.env.example` 记录 `GITHUB_MCP_DOCKER_IMAGE`、`GITHUB_PERSONAL_ACCESS_TOKEN`、`GITHUB_TOOLSETS` 和 `GITHUB_READ_ONLY`。
 - 新增默认跳过的 smoke test：仅当 `RUN_GITHUB_MCP_SMOKE=1`、`GITHUB_PERSONAL_ACCESS_TOKEN` 存在且 Docker 可用时运行。
 - smoke test 覆盖 GitHub MCP server 启动、`initialize`、`tools/list` 和 `build_mcp_tool_registry()`。
 
 运行真实 GitHub MCP smoke：
 
 ```bash
-export GITHUB_PERSONAL_ACCESS_TOKEN=...
+. .venv/bin/activate
+# Edit .env and set GITHUB_PERSONAL_ACCESS_TOKEN first.
 RUN_GITHUB_MCP_SMOKE=1 .venv/bin/python -m pytest -q tests/test_github_mcp_smoke.py
 ```
 

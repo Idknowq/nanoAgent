@@ -44,6 +44,8 @@ MCP 功能必须基于 async-first 设计：stdio transport 使用 `asyncio.crea
 
 修改工具、上下文压缩、持久化、任务状态、后台调度或权限相关逻辑时，应补充有针对性的测试，并保持消息协议和运行产物的兼容性。
 
+commit风格： "feat/fix/update等(doc/mcp等): fix some bugs"，等我指令再commit。
+
 ## 对话要求
 
 交流应简洁、务实，优先说明结论、依据和下一步。不要使用夸张或情绪化表达。

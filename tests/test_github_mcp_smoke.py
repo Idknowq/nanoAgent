@@ -4,11 +4,14 @@ import os
 import shutil
 
 import pytest
+from dotenv import load_dotenv
 
 from nano_agent.mcp import MCPClientSession, StdioMCPTransport
 from nano_agent.mcp.github import GITHUB_TOKEN_ENV, build_github_mcp_stdio_config
 from nano_agent.mcp.registry import build_mcp_tool_registry
 
+
+load_dotenv()
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_GITHUB_MCP_SMOKE") != "1",
