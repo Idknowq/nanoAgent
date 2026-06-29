@@ -71,4 +71,5 @@ class AgentConfig(BaseModel):
         gt=0,
         le=120,
     )  # 主 Agent 无前台工作时等待任一后台完成事件的最大秒数。
+    mcp_enabled: bool = False  # 是否启动并暴露配置中的 MCP servers。
     mcp_servers: tuple[MCPServerConfig, ...] = ()  # 可选 MCP server 配置，默认不启用外部 MCP。

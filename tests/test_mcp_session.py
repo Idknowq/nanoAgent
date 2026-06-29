@@ -85,7 +85,7 @@ for line in sys.stdin:
     assert initialize_result.server_info == {"name": "mock", "version": "0.1.0"}
     assert tools[0].server_name == "github"
     assert tools[0].remote_name == "search_issues"
-    assert tools[0].tool_name == "github.search_issues"
+    assert tools[0].tool_name == "github__search_issues"
     assert tools[0].description == "Search issues."
     assert tools[0].input_schema == {"type": "object", "properties": {}}
 
@@ -193,4 +193,4 @@ for line in sys.stdin:
         await session.shutdown()
 
     assert initialize_result.raw["requestId"] == 1
-    assert tools[0].tool_name == "github.search_issues"
+    assert tools[0].tool_name == "github__search_issues"

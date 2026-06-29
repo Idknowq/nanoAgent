@@ -13,6 +13,7 @@ from nano_agent.hooks.registry import build_default_hooks
 from nano_agent.hooks.skill_activation import SkillActivationHook
 from nano_agent.loop import AgentLoop
 from nano_agent.memory.store import JsonlMemoryStore, MemoryRecord
+from nano_agent.mcp.manager import MCPRuntimeManager
 from nano_agent.models import CompletionReport, RunStatus, RunSummary
 from nano_agent.persistence.config_store import ConfigStore
 from nano_agent.persistence.message_store import MessageStore
@@ -60,6 +61,7 @@ class NanoAgent:
         run = self.workspace_manager.create_run(repo_url=repo_url)
         run.status = RunStatus.RUNNING
         supervisor: BackgroundJobSupervisor | None = None  # 当前主运行的后台调度器。
+        mcp_manager: MCPRuntimeManager | None = None  # 当前运行拥有的 MCP session 生命周期。
 
         try:
             workspace_path = self.workspace_manager.next_workspace_path(repo_url, run.run_id)
@@ -111,6 +113,11 @@ class NanoAgent:
             tools.register(TaskGetTool(task_service))
             tools.register(TaskListTool(task_service))
             tools.register(TaskUpdateTool(task_service))
+            if self.config.mcp_enabled:
+                mcp_manager = MCPRuntimeManager(self.config.mcp_servers)
+                await mcp_manager.start()
+                for tool in mcp_manager.tool_registry().tools():
+                    tools.register(tool)
             hooks = [SkillActivationHook(skill_session), *build_default_hooks(self.config)]
             if self.config.subagents_enabled:
                 manager = SubagentManager(
@@ -180,6 +187,11 @@ class NanoAgent:
                 await supervisor.shutdown(cancel_active=True)
             except Exception as exc:  # noqa: BLE001 - shutdown must not discard the main result.
                 run.notes.append(f"Background shutdown failed: {type(exc).__name__}: {exc}")
+        if mcp_manager is not None:
+            try:
+                await mcp_manager.shutdown()
+            except Exception as exc:  # noqa: BLE001 - shutdown must not discard the main result.
+                run.notes.append(f"MCP shutdown failed: {type(exc).__name__}: {exc}")
         run.finished_at = datetime.now(timezone.utc)
         if run.completion_report is None:
             run.completion_report = CompletionReport(

@@ -10,7 +10,7 @@
 
 - async-first：不新增同步生产入口，不使用同步 subprocess、阻塞 sleep 或新的同步兼容 wrapper。
 - transport 与 tool adapter 分离：stdio、HTTP 只负责 JSON-RPC 传输，MCP tool adapter 负责映射到 `RuntimeTool`。
-- MCP server 必须使用命名空间，避免与内置工具或其他 MCP server 冲突，例如 `github.search_issues`。
+- MCP server 必须使用命名空间，避免与内置工具或其他 MCP server 冲突，例如 `github__search_issues`。
 - MCP 工具必须接入现有权限、审计、workspace containment 和并发元数据机制。
 - GitHub token、OAuth token、header 等敏感信息不得进入 LLM 上下文、日志、tool result 或 report。
 - 第一版应使用 mock MCP server 做稳定测试，再接入真实 GitHub MCP server。
@@ -102,7 +102,7 @@
 - session 层负责递增 JSON-RPC request id，transport 仍只负责发送和接收。
 - 新增 `MCPInitializeResult`，保存协商协议版本、serverInfo、capabilities 和原始 initialize result。
 - 新增 `MCPToolDefinition`，将远端 MCP tool 映射为 nanoAgent namespaced tool definition。
-- 工具名使用 `<server>.<remote_tool>`，例如 `github.search_issues`。
+- 工具名使用 `<server>__<remote_tool>`，例如 `github__search_issues`。
 - 远端 tool name 必须是 namespace-safe 名称；非法名称作为 MCP protocol error 处理，不做静默修正。
 - JSON-RPC error 会转换为 session 层 `MCPRemoteError`。
 - 使用 mock MCP server 覆盖 initialize、tools/list、未初始化调用、远端错误、非法工具名和 request id 递增。
@@ -118,10 +118,10 @@
 已完成内容：
 
 - `MCPClientSession` 新增 `call_tool()`，通过 JSON-RPC `tools/call` 调用远端 MCP tool。
-- `tools/call` 发送给 MCP server 的名称使用远端 tool name，例如 `search_issues`，不发送 `github.search_issues`。
+- `tools/call` 发送给 MCP server 的名称使用远端 tool name，例如 `search_issues`，不发送 `github__search_issues`。
 - 新增 `MCPToolCallResult`，保存 MCP content blocks、`isError` 和原始 result。
 - 新增 `MCPToolAdapter`，把一个 `MCPToolDefinition` 包装为 nanoAgent `RuntimeTool`。
-- adapter 使用 namespaced tool name，例如 `github.search_issues`，并继承 MCP `inputSchema`。
+- adapter 使用 namespaced tool name，例如 `github__search_issues`，并继承 MCP `inputSchema`。
 - MCP tool 成功结果转换为 `ToolResult(success=True)`。
 - MCP `isError=true` 转换为 `mcp_tool_error`。
 - JSON-RPC remote error、protocol error 和 transport error 会转换为对应 `ToolResult.failure`。
@@ -138,7 +138,7 @@
 已完成内容：
 
 - 新增 `build_mcp_tool_registry()`，将 `MCPToolDefinition` 列表转换为 `MCPToolAdapter` 并注册进 `ToolRegistry`。
-- MCP tool 使用 namespaced 工具名，例如 `github.search_issues`。
+- MCP tool 使用 namespaced 工具名，例如 `github__search_issues`。
 - 复用 `ToolRegistry` 的重复名称检测，避免 MCP tool 或内置工具命名冲突被静默覆盖。
 - MCP adapter 默认元数据保持保守只读策略：`approval_level=READ`、`category=mcp`、`is_mutating=False`、`requires_workspace=False`。
 - MCP adapter 默认允许并发：`can_run_concurrently=True`，并使用 `mcp:<server_name>` 作为 conflict group。
@@ -156,7 +156,7 @@
 
 - 新增端到端集成测试，覆盖 `MCPServerConfig`、`StdioMCPTransport`、`MCPClientSession.initialize()`、`notifications/initialized`、`tools/list`、`build_mcp_tool_registry()`、`MCPToolAdapter.invoke()` 和 `tools/call`。
 - mock server 要求收到 `notifications/initialized` 后才允许 `tools/list` 和 `tools/call`，贴近真实 MCP server 生命周期。
-- 集成测试确认 registry 能暴露 `mock.search_issues`，并能通过 adapter 得到 `ToolResult(success=True)`。
+- 集成测试确认 registry 能暴露 `mock__search_issues`，并能通过 adapter 得到 `ToolResult(success=True)`。
 - 集成测试确认 MCP tool spec 保留 `category=mcp`、`approval_level=READ`、`can_run_concurrently=True` 和 `mcp:<server>` conflict group。
 
 下一步接入 GitHub MCP server，先使用 stdio 模式和只读 toolset 做 smoke test。
@@ -183,7 +183,115 @@
 RUN_GITHUB_MCP_SMOKE=1 .venv/bin/python -m pytest -q tests/test_github_mcp_smoke.py
 ```
 
+下一步补 GitHub MCP CLI 显式启用入口。
+
+### Step 8：MCP runtime lifecycle 接入
+
+状态：已完成。
+
+本步把已实现的 MCP session、tool discovery、registry 和 adapter 接入 nanoAgent 主运行生命周期。默认仍关闭 MCP；只有 `AgentConfig.mcp_enabled=True` 时才启动配置中的 MCP servers。
+
+已完成内容：
+
+- 新增 MCP runtime manager，负责启动 enabled MCP servers、执行 `initialize`、执行 `tools/list`、构建 MCP tool registry，并在 run 结束时 shutdown sessions。
+- `AgentConfig` 新增 `mcp_enabled`，默认 `False`，避免普通运行意外启动 Docker 或外部进程。
+- `NanoAgent.run()` 在显式启用 MCP 时合并 MCP tools 到当前 run 的 `ToolRegistry`。
+- shutdown 放入顶层清理路径，避免 MCP server 子进程泄漏。
+- 测试覆盖 disabled 不启动、enabled 注册 MCP tool、AgentLoop 可调用 MCP tool，以及 run 结束 shutdown。
+
 下一步补 HTTP remote MCP 和 GitHub PAT/OAuth 配置。
+
+暂不包含：
+
+- CLI 参数。
+- HTTP remote MCP。
+- GitHub MCP 默认自动启用。
+- 写工具权限细分。
+- OAuth。
+
+### Step 9：GitHub MCP CLI 装配
+
+状态：已完成。
+
+本步解决 `mcp_enabled=True` 但工具数量没有增加的问题。根因是开关只控制是否启动 `AgentConfig.mcp_servers`，但 CLI 没有把 GitHub MCP server 配置写入 `mcp_servers`，因此运行时没有 server 可发现工具。
+
+已完成内容：
+
+- `AgentConfig.mcp_enabled` 默认改为 `False`，避免默认运行进入外部 MCP 启动路径。
+- CLI 新增 `--mcp-github` 显式开关。
+- 新增 MCP provider registry，当前注册 `github` provider。
+- CLI 启用 `--mcp-github` 时通过 provider registry 构建 GitHub MCP server，并写入 `AgentConfig.mcp_servers`。
+- CLI 只有在存在 MCP server 时才设置 `mcp_enabled=True`。
+- 缺少 `GITHUB_PERSONAL_ACCESS_TOKEN` 时，CLI 在启动 agent 前返回明确错误。
+- 测试覆盖 provider registry、默认关闭 MCP、显式启用 GitHub MCP 配置、缺 token 错误提示。
+- 修复 MCP 工具名与 OpenAI-compatible tool name 规则不兼容的问题：本地工具名从 `server.remote` 改为 `server__remote`，避免 `.` 被 LLM API 拒绝；远端 MCP `tools/call` 仍使用原始 `remote_name`。
+- 修复同一 stdio MCP server 并发调用时共享 stdout 读取冲突的问题：`StdioMCPTransport.request()` 增加 async lock，避免多个 coroutine 同时等待 `readline/readuntil`。
+- 优化 MCP JSON text result 摘要：console 和 audit summary 不再直接展示大段原始 JSON，完整内容仍保留在 `ToolResult.data`。
+
+使用方式：
+
+```bash
+.venv/bin/python -m nano_agent.cli run \
+  https://github.com/github/github-mcp-server \
+  "请使用 GitHub MCP 查询仓库基本信息和最近 5 个 open issues" \
+  --mcp-github
+```
+
+`.env` 需要包含：
+
+```env
+GITHUB_MCP_DOCKER_IMAGE=ghcr.io/github/github-mcp-server
+GITHUB_PERSONAL_ACCESS_TOKEN=your_github_personal_access_token
+GITHUB_TOOLSETS=context,repos,issues,pull_requests
+GITHUB_READ_ONLY=1
+```
+
+下一步补 HTTP remote MCP、GitHub PAT/OAuth 配置和写工具权限细分。
+
+## 通用装配层规划
+
+当前 Step 9 的目标是先跑通 GitHub MCP，因此 CLI 仍保留 `--mcp-github` 这个显式开关。但具体 provider 构造已经从 CLI 移入 MCP provider registry，后续可以在不改 runtime lifecycle 的前提下迁移到更通用的配置入口。
+
+目标分层：
+
+- 用户配置层：CLI 选项、项目级 `config.json`、环境变量。
+- MCP 装配层：解析配置、合并来源、展开 provider preset、校验 server config。
+- MCP 运行时层：只接收 `tuple[MCPServerConfig, ...]`，负责启动、发现工具、调用和关闭。
+
+建议演进方向：
+
+- 保持 `AgentConfig.mcp_servers` 作为运行时唯一入口。
+- 将当前 `--mcp-github` 迁移为可重复的通用选项，例如 `--mcp github`。
+- 增加 `--mcp-config`，读取类似 Claude Code 的项目级 JSON 配置。
+- provider preset 只负责把短名称展开为 `MCPServerConfig`，例如 `github` 展开为官方 GitHub MCP Docker stdio server。
+- config 文件中的显式 server 配置优先支持 stdio，HTTP remote MCP 在 transport 完成后再接入。
+
+配置文件草案：
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "type": "preset",
+      "preset": "github",
+      "enabled": true
+    },
+    "custom": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@example/mcp-server"],
+      "enabled": false
+    }
+  }
+}
+```
+
+迁移原则：
+
+- CLI 不直接了解单个 provider 的启动细节。
+- config loader 输出统一的 `MCPServerConfig`。
+- provider registry 只保存内置 preset，不处理 CLI、JSON 或优先级合并。
+- 运行时不关心配置来源。
 
 ## GitHub MCP 接入策略
 

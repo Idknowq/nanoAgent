@@ -37,5 +37,5 @@ async def test_github_mcp_stdio_lists_read_only_tools() -> None:
         await session.shutdown()
 
     assert definitions
-    assert all(definition.tool_name.startswith("github.") for definition in definitions)
+    assert all(definition.tool_name.startswith("github__") for definition in definitions)
     assert registry.names()

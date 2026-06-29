@@ -12,6 +12,9 @@ from rich.text import Text
 
 from nano_agent.agent import NanoAgent
 from nano_agent.config import AgentConfig
+from nano_agent.mcp.github import GITHUB_TOKEN_ENV
+from nano_agent.mcp.models import MCPServerConfig
+from nano_agent.mcp.providers import build_mcp_provider_configs
 
 load_dotenv()
 
@@ -23,6 +26,33 @@ default_config = AgentConfig()  # CLI 未提供覆盖参数时使用的 Agent �
 @app.callback()
 def main() -> None:
     """nanoAgent repository diagnosis CLI."""
+
+
+def build_cli_config(
+    *,
+    workdir: Path,
+    max_steps: int,
+    background_idle_wait_timeout: float,
+    allow_command: bool,
+    allow_write: bool,
+    llm: Literal["deepseek"],
+    model: str | None,
+    mcp_github: bool,
+) -> AgentConfig:
+    """Build AgentConfig from CLI options."""
+    provider_names = ("github",) if mcp_github else ()
+    mcp_servers: tuple[MCPServerConfig, ...] = build_mcp_provider_configs(provider_names)
+    return AgentConfig(
+        workspace_root=workdir,
+        max_steps=max_steps,
+        background_idle_wait_timeout_seconds=background_idle_wait_timeout,
+        allow_command=allow_command,
+        allow_write=allow_write,
+        llm_provider=llm,
+        llm_model=model,
+        mcp_enabled=bool(mcp_servers),
+        mcp_servers=mcp_servers,
+    )
 
 
 @app.command()
@@ -62,17 +92,30 @@ def run(
         str | None,
         typer.Option("--model", help="Override provider model name."),
     ] = None,
+    mcp_github: Annotated[
+        bool,
+        typer.Option("--mcp-github", help="Enable the official GitHub MCP server."),
+    ] = False,
 ) -> None:
     """Run the single-agent tool-use loop for a repository."""
-    config = AgentConfig(
-        workspace_root=workdir,
-        max_steps=max_steps,
-        background_idle_wait_timeout_seconds=background_idle_wait_timeout,
-        allow_command=allow_command,
-        allow_write=allow_write,
-        llm_provider=llm,
-        llm_model=model,
-    )
+    try:
+        config = build_cli_config(
+            workdir=workdir,
+            max_steps=max_steps,
+            background_idle_wait_timeout=background_idle_wait_timeout,
+            allow_command=allow_command,
+            allow_write=allow_write,
+            llm=llm,
+            model=model,
+            mcp_github=mcp_github,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if GITHUB_TOKEN_ENV in message:
+            raise typer.BadParameter(
+                f"{GITHUB_TOKEN_ENV} is required when --mcp-github is enabled."
+            ) from exc
+        raise
     agent = NanoAgent(config=config)
     result = asyncio.run(agent.run(repo_url=repo_url, user_request=user_request))
 

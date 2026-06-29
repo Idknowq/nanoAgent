@@ -39,6 +39,7 @@ class StdioMCPTransport:
         self._config = config  # Server process configuration.
         self._timeout_seconds = timeout_seconds  # Default timeout for I/O operations.
         self._process: asyncio.subprocess.Process | None = None  # Active server subprocess.
+        self._request_lock = asyncio.Lock()  # Serializes stdio request/response reads.
 
     async def start(self) -> None:
         """Start the configured MCP server subprocess."""
@@ -59,6 +60,11 @@ class StdioMCPTransport:
 
     async def request(self, request: JSONRPCRequest) -> JSONRPCResponse:
         """Send one JSON-RPC request and wait for its matching response."""
+        async with self._request_lock:
+            return await self._request_unlocked(request)
+
+    async def _request_unlocked(self, request: JSONRPCRequest) -> JSONRPCResponse:
+        """Send one JSON-RPC request while holding the transport request lock."""
         process = self._require_process()
         if process.stdin is None or process.stdout is None:
             raise MCPTransportClosedError("stdio MCP server pipes are unavailable")

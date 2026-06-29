@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -57,6 +58,39 @@ for line in sys.stdin:
         await transport.shutdown()
 
     assert response.result == {"method": "ping"}
+
+
+async def test_stdio_transport_serializes_concurrent_requests(tmp_path: Path) -> None:
+    script = write_mock_server(
+        tmp_path,
+        """
+import json
+import sys
+import time
+
+for line in sys.stdin:
+    request = json.loads(line)
+    time.sleep(0.05)
+    print(json.dumps({
+        "jsonrpc": "2.0",
+        "id": request["id"],
+        "result": {"method": request["method"]},
+    }), flush=True)
+""".strip(),
+    )
+    transport = make_transport(script)
+
+    await transport.start()
+    try:
+        first, second = await asyncio.gather(
+            transport.request(JSONRPCRequest(id=1, method="first")),
+            transport.request(JSONRPCRequest(id=2, method="second")),
+        )
+    finally:
+        await transport.shutdown()
+
+    assert first.result == {"method": "first"}
+    assert second.result == {"method": "second"}
 
 
 async def test_stdio_transport_requires_start(tmp_path: Path) -> None:

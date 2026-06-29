@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from nano_agent.mcp.models import MCPToolCallResult, MCPToolDefinition
@@ -60,6 +61,36 @@ def _summarize_tool_call_result(result: MCPToolCallResult) -> str:
     summary = "\n".join(text_parts).strip()
     if not summary:
         return "MCP tool completed"
+    json_summary = _summarize_json_text(summary)
+    if json_summary is not None:
+        return json_summary
     if len(summary) > 500:
         return summary[:497] + "..."
     return summary
+
+
+def _summarize_json_text(text: str) -> str | None:
+    """Return a compact summary for JSON text content."""
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(value, dict):
+        return _summarize_json_object(value)
+    if isinstance(value, list):
+        return f"MCP tool returned JSON array with {len(value)} item(s)"
+    return f"MCP tool returned JSON {type(value).__name__}"
+
+
+def _summarize_json_object(value: dict[str, Any]) -> str:
+    """Return a compact summary for a JSON object."""
+    if isinstance(value.get("items"), list) and isinstance(value.get("total_count"), int):
+        return (
+            "MCP tool returned JSON object "
+            f"with total_count={value['total_count']} and {len(value['items'])} item(s)"
+        )
+    keys = list(value)[:5]
+    key_text = ", ".join(keys)
+    if len(value) > len(keys):
+        key_text += ", ..."
+    return f"MCP tool returned JSON object with keys: {key_text}"

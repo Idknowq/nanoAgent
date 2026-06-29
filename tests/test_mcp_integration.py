@@ -104,13 +104,13 @@ async def test_mcp_stdio_tool_lifecycle_end_to_end(tmp_path: Path) -> None:
         initialize_result = await session.initialize()
         definitions = await session.list_tools()
         registry = build_mcp_tool_registry(session, definitions)
-        tool = registry.get("mock.search_issues")
+        tool = registry.get("mock__search_issues")
         result = await tool.invoke({"query": "repo:owner/repo is:open"}, make_context(tmp_path))
     finally:
         await session.shutdown()
 
     assert initialize_result.server_info == {"name": "mock-github", "version": "0.1.0"}
-    assert registry.names() == {"mock.search_issues"}
+    assert registry.names() == {"mock__search_issues"}
     assert result.success
     assert result.summary == "results for repo:owner/repo is:open"
 
@@ -136,7 +136,7 @@ async def test_mcp_integration_registry_specs(tmp_path: Path) -> None:
         await session.shutdown()
 
     spec = registry.specs()[0]
-    assert spec.name == "mock.search_issues"
+    assert spec.name == "mock__search_issues"
     assert spec.category == "mcp"
     assert spec.approval_level is ApprovalLevel.READ
     assert spec.can_run_concurrently

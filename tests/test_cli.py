@@ -4,8 +4,10 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from nano_agent.cli import app, run
+from nano_agent.cli import app, build_cli_config, run
 from nano_agent.config import AgentConfig
+from nano_agent.mcp.github import GITHUB_TOKEN_ENV
+from nano_agent.mcp.models import MCPServerConfig, MCPTransportType
 from nano_agent.models import CompletionReport, RunStatus, RunSummary
 
 
@@ -25,6 +27,7 @@ def test_cli_exposes_explicit_permission_flags() -> None:
     assert "user_request" in parameters
     assert "allow_command" in parameters
     assert "allow_write" in parameters
+    assert "mcp_github" in parameters
     assert "auto_approve" not in parameters
     assert "auto_approve_write" not in parameters
 
@@ -35,8 +38,86 @@ def test_cli_help_uses_renamed_permission_options() -> None:
     assert result.exit_code == 0
     assert "--allow-command" in result.stdout
     assert "--allow-write" in result.stdout
+    assert "--mcp-github" in result.stdout
     assert "--background-idle-wai" in result.stdout
     assert "--auto-approve" not in result.stdout
+
+
+def test_cli_config_disables_mcp_by_default(tmp_path: Path) -> None:
+    """CLI 默认不启动外部 MCP server。"""
+
+    config = build_cli_config(
+        workdir=tmp_path / "workspaces",
+        max_steps=3,
+        background_idle_wait_timeout=1.0,
+        allow_command=False,
+        allow_write=False,
+        llm="deepseek",
+        model=None,
+        mcp_github=False,
+    )
+
+    assert config.mcp_enabled is False
+    assert config.mcp_servers == ()
+
+
+def test_cli_config_adds_github_mcp_server(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    """CLI 显式启用 GitHub MCP 时写入 GitHub server 配置。"""
+
+    server = MCPServerConfig(
+        name="github",
+        transport=MCPTransportType.STDIO,
+        command="docker",
+        args=("run", "ghcr.io/github/github-mcp-server"),
+    )
+    def build_servers(names: tuple[str, ...]) -> tuple[MCPServerConfig, ...]:
+        assert names == ("github",)
+        return (server,)
+
+    monkeypatch.setattr("nano_agent.cli.build_mcp_provider_configs", build_servers)
+
+    config = build_cli_config(
+        workdir=tmp_path / "workspaces",
+        max_steps=3,
+        background_idle_wait_timeout=1.0,
+        allow_command=False,
+        allow_write=False,
+        llm="deepseek",
+        model=None,
+        mcp_github=True,
+    )
+
+    assert config.mcp_enabled is True
+    assert config.mcp_servers == (server,)
+
+
+def test_cli_reports_missing_github_token(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """启用 GitHub MCP 但缺 token 时，CLI 返回明确错误。"""
+
+    def missing_token() -> MCPServerConfig:
+        raise ValueError(f"{GITHUB_TOKEN_ENV} is required")
+
+    def build_servers(names: tuple[str, ...]) -> tuple[MCPServerConfig, ...]:
+        assert names == ("github",)
+        return (missing_token(),)
+
+    monkeypatch.setattr("nano_agent.cli.build_mcp_provider_configs", build_servers)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run",
+            "https://example.com/repo.git",
+            "Inspect repo.",
+            "--mcp-github",
+        ],
+        terminal_width=160,
+    )
+
+    assert result.exit_code != 0
+    assert GITHUB_TOKEN_ENV in result.output
+    assert "--mcp-github" in result.output
+    assert "enabled" in result.output
 
 
 def test_cli_prints_compact_status_without_summary_content(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]

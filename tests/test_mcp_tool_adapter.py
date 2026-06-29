@@ -98,12 +98,49 @@ for line in sys.stdin:
     finally:
         await session.shutdown()
 
-    assert tool.name == "github.search_issues"
+    assert tool.name == "github__search_issues"
     assert tool.description == "Search issues."
     assert tool.input_schema == {"type": "object", "properties": {"query": {"type": "string"}}}
     assert result.success
     assert result.summary == "called search_issues with repo:owner/repo is:open"
     assert result.data["raw"]["seenName"] == "search_issues"
+
+
+async def test_mcp_tool_adapter_summarizes_json_text_result(tmp_path: Path) -> None:
+    script = write_mock_server(
+        tmp_path,
+        """
+import json
+import sys
+
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    if request["method"] == "initialize":
+        result = {"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {}}
+    elif request["method"] == "tools/list":
+        result = {"tools": [{"name": "search_repositories", "inputSchema": {}}]}
+    elif request["method"] == "tools/call":
+        payload = {"total_count": 3146, "items": [{"name": "github-mcp-server"}]}
+        result = {"content": [{"type": "text", "text": json.dumps(payload)}], "isError": False}
+    else:
+        result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+""".strip(),
+    )
+    session = make_session(script)
+
+    await session.start()
+    try:
+        definition = await discover_tool(session)
+        result = await MCPToolAdapter(session, definition).invoke({}, make_context(tmp_path))
+    finally:
+        await session.shutdown()
+
+    assert result.success
+    assert result.summary == "MCP tool returned JSON object with total_count=3146 and 1 item(s)"
+    assert result.data["content"][0]["text"].startswith('{"total_count":')
 
 
 async def test_mcp_tool_adapter_converts_tool_error_result(tmp_path: Path) -> None:
@@ -184,7 +221,7 @@ async def test_session_rejects_call_before_initialize(tmp_path: Path) -> None:
     definition = MCPToolDefinition(
         server_name="github",
         remote_name="search_issues",
-        tool_name="github.search_issues",
+        tool_name="github__search_issues",
     )
 
     await session.start()
@@ -216,7 +253,7 @@ for line in sys.stdin:
     definition = MCPToolDefinition(
         server_name="linear",
         remote_name="search_issues",
-        tool_name="linear.search_issues",
+        tool_name="linear__search_issues",
     )
 
     await session.start()

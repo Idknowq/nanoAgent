@@ -150,7 +150,7 @@ class MCPClientSession:
             return MCPToolDefinition(
                 server_name=self._server.name,
                 remote_name=remote_name,
-                tool_name=f"{self._server.name}.{remote_name}",
+                tool_name=f"{self._server.name}__{remote_name}",
                 description=description,
                 input_schema=input_schema,
             )

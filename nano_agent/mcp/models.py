@@ -64,14 +64,14 @@ class MCPToolDefinition(BaseModel):
 
     server_name: str = Field(pattern=_SERVER_NAME_RE.pattern)  # MCP server namespace.
     remote_name: str = Field(pattern=_TOOL_NAME_RE.pattern)  # Tool name exposed by the server.
-    tool_name: str  # Namespaced tool name exposed to nanoAgent.
+    tool_name: str  # LLM-safe namespaced tool name exposed to nanoAgent.
     description: str = ""  # Tool description supplied by the MCP server.
     input_schema: dict[str, Any] = Field(default_factory=dict)  # JSON schema for tool input.
 
     @model_validator(mode="after")
     def validate_namespaced_tool_name(self) -> MCPToolDefinition:
         """Ensure the local tool name is derived from server and remote names."""
-        expected = f"{self.server_name}.{self.remote_name}"
+        expected = f"{self.server_name}__{self.remote_name}"
         if self.tool_name != expected:
             raise ValueError(f"MCP tool name must be {expected}")
         return self

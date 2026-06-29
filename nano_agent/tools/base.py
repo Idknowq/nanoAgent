@@ -174,6 +174,10 @@ class ToolRegistry:
     def selected(self, names: set[str]) -> ToolRegistry:
         return ToolRegistry([tool for name, tool in self._tools.items() if name in names])
 
+    def tools(self) -> list[RuntimeTool]:
+        """Return registered tool instances in registration order."""
+        return list(self._tools.values())
+
     def specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(

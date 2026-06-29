@@ -9,6 +9,7 @@ from nano_agent.mcp import MCPServerConfig, MCPTransportType
 def test_agent_config_has_no_mcp_servers_by_default() -> None:
     config = AgentConfig()
 
+    assert config.mcp_enabled is False
     assert config.mcp_servers == ()
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -35,7 +36,7 @@ def make_definition(
     return MCPToolDefinition(
         server_name="github",
         remote_name=remote_name,
-        tool_name=f"github.{remote_name}",
+        tool_name=f"github__{remote_name}",
         description=description,
         input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
     )
@@ -47,8 +48,9 @@ def test_build_mcp_tool_registry_registers_namespaced_tools(tmp_path: Path) -> N
         [make_definition("search_issues")],
     )
 
-    assert registry.contains("github.search_issues")
-    assert registry.get("github.search_issues").name == "github.search_issues"
+    assert registry.contains("github__search_issues")
+    assert registry.get("github__search_issues").name == "github__search_issues"
+    assert re.fullmatch(r"^[a-zA-Z0-9_-]+$", registry.get("github__search_issues").name)
 
 
 def test_build_mcp_tool_registry_rejects_duplicate_tool_names(tmp_path: Path) -> None:
@@ -69,7 +71,7 @@ def test_mcp_tool_registry_specs_include_adapter_metadata(tmp_path: Path) -> Non
     )
 
     spec = registry.specs()[0]
-    assert spec.name == "github.search_issues"
+    assert spec.name == "github__search_issues"
     assert spec.description == "Search issues."
     assert spec.approval_level is ApprovalLevel.READ
     assert spec.input_schema == {"type": "object", "properties": {"query": {"type": "string"}}}
@@ -91,7 +93,7 @@ def test_mcp_tool_registry_selected_preserves_mcp_tool(tmp_path: Path) -> None:
         ],
     )
 
-    selected = registry.selected({"github.get_pull_request"})
+    selected = registry.selected({"github__get_pull_request"})
 
-    assert selected.names() == {"github.get_pull_request"}
-    assert selected.get("github.get_pull_request").description == "Get pull request."
+    assert selected.names() == {"github__get_pull_request"}
+    assert selected.get("github__get_pull_request").description == "Get pull request."
