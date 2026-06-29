@@ -161,6 +161,30 @@
 
 下一步接入 GitHub MCP server，先使用 stdio 模式和只读 toolset 做 smoke test。
 
+### Step 7：GitHub MCP server stdio smoke
+
+状态：已完成。
+
+本步接入 GitHub 官方 MCP server 的 Docker stdio 运行方式，只做默认跳过的 smoke test，不接 HTTP remote MCP、不改 AgentLoop 自动挂载、不开放写操作。
+
+已完成内容：
+
+- 新增 GitHub MCP stdio 配置 helper，目标镜像为 `ghcr.io/github/github-mcp-server`。
+- helper 使用 Docker `-e GITHUB_PERSONAL_ACCESS_TOKEN` 从父进程环境传递 token，不把 token 明文写入 `MCPServerConfig.env`。
+- 默认启用只读模式：`GITHUB_READ_ONLY=1`。
+- 默认启用只读相关 toolsets：`context,repos,issues,pull_requests`。
+- 新增默认跳过的 smoke test：仅当 `RUN_GITHUB_MCP_SMOKE=1`、`GITHUB_PERSONAL_ACCESS_TOKEN` 存在且 Docker 可用时运行。
+- smoke test 覆盖 GitHub MCP server 启动、`initialize`、`tools/list` 和 `build_mcp_tool_registry()`。
+
+运行真实 GitHub MCP smoke：
+
+```bash
+export GITHUB_PERSONAL_ACCESS_TOKEN=...
+RUN_GITHUB_MCP_SMOKE=1 .venv/bin/python -m pytest -q tests/test_github_mcp_smoke.py
+```
+
+下一步补 HTTP remote MCP 和 GitHub PAT/OAuth 配置。
+
 ## GitHub MCP 接入策略
 
 GitHub 是第一个具体 MCP provider，但不应把 GitHub 逻辑写死到 MCP 核心层。GitHub 接入应建立在通用 MCP 基础设施之上。
