@@ -4,6 +4,8 @@
 
 本项目是一个轻量级 Coding Agent，用于面向真实代码仓库执行诊断、修复、验证和结果汇报。整体架构围绕 Agent loop 展开：LLM 产生工具调用，运行时执行工具并回填结果，直到提交结构化完成报告。
 
+核心运行时已经完成 `asyncio` 异步化：`NanoAgent.run()`、`AgentLoop.run()`、LLM client、runtime tool、hook、context compactor、task service、background supervisor 和 subagent manager 均使用 async 接口。多 Agent 调度已从 `ThreadPoolExecutor` 迁移为 `asyncio.Task`，后台通知、取消、finish_run active-job 检查和 delegate tools 均通过 async 路径协作。新增运行时能力应沿用 async-first 设计，不再新增同步生产入口。
+
 主要模块职责如下：
 
 - `tools/`：定义运行时工具体系，包括文件读取、搜索、编辑、命令执行、仓库克隆、任务委派和运行结束报告等工具。
@@ -24,11 +26,13 @@
 
 ## 开发方向
 
-后续开发方向是从当前同步执行模型逐步迁移到 `asyncio`。新功能应优先基于异步接口设计和实现，避免继续扩大同步调用链。
+后续主要开发方向是接入 MCP。先搭建通用 MCP 基础设施，再接入 GitHub 等具体 MCP server。MCP 开发记录、阶段计划和验收要求统一维护在 `MCP.md`。
 
-已开发功能应在保持行为兼容和测试覆盖的前提下逐步转为异步。多 Agent 的实现机制后续应从 `ThreadPoolExecutor` 线程池模型迁移到基于 `asyncio` task、异步锁和异步通知的调度模型。
+MCP 功能必须基于 async-first 设计：stdio transport 使用 `asyncio.create_subprocess_exec()`，HTTP transport 使用异步 HTTP client，client 初始化、`tools/list`、`tools/call` 和 shutdown 全部使用 async 生命周期管理。MCP tool adapter 应实现 async `RuntimeTool.run()`，并接入现有权限、workspace containment、并发元数据、审计 hook 和工具命名空间机制，避免绕过当前隔离与审计模型。
 
-每次开发完成后更新 `REFACTOR.md` 文档。
+新增功能默认基于 async 实现，不再新增同步生产入口。除非有明确理由，不应新增 `ThreadPoolExecutor`、同步 subprocess、阻塞 sleep 或新的同步兼容 wrapper。
+
+每次 MCP 相关开发完成后更新 `MCP.md` 文档。
 
 ## 代码风格
 

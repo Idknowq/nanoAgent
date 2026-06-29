@@ -1,4 +1,8 @@
-# asyncio Refactor Plan
+# asyncio Refactor Archive
+
+状态：已完成，已归档。
+
+本文档记录 nanoAgent 从同步执行模型迁移到 `asyncio` 执行模型的历史过程和最终约束。当前重构进度均已完成；后续 MCP 相关开发记录维护在 `MCP.md`。
 
 ## 目标
 
@@ -12,7 +16,7 @@
 - 外部进程调用使用 `asyncio.create_subprocess_exec()`。
 - HTTP/MCP 等网络能力使用异步 client。
 
-## 当前进度
+## 归档状态
 
 已完成：
 
@@ -29,12 +33,7 @@
 - Step 9：`TaskService` 已提供 async API，task tools 已改为 await；`MessageStore` 的 AgentLoop 主写入路径已建立 async 边界。
 - Step 10：`BackgroundJobSupervisor` 已从线程池迁移到 `asyncio.Task`，delegate tools、completion hook、finish_run active-job 检查和 shutdown 路径已改为 async。
 - Step 11：顶层 config、prompt、report、summary 保存路径已建立 async boundary，CLI 和实验脚本统一通过 async 入口运行。
-
-仍未完成：
-
-- background store、subagent store、task store、message/config/prompt/report/summary store 仍保留同步实现或 `asyncio.to_thread()` 过渡边界。
-- 需要做一次同步残留清理，确保生产运行路径全部通过 async API 执行，程序仍可正常运行。
-- MCP 尚未接入。
+- Step 12：同步残留清理和全 async 验收已完成。
 
 ## 不可破坏的协议顺序
 
@@ -112,17 +111,17 @@ hooks 顺序：
 - 多个 MCP HTTP 请求、后台 job 查询、外部进程等待可以异步等待。
 - 文件系统持久化如果仍使用同步原子写，应放入明确的异步边界中，避免阻塞核心 event loop。
 
-## 当前同步边界
+## 已清理的同步边界
 
-当前剩余需要重构的同步边界：
+本轮重构已覆盖的同步边界：
 
-- `nano_agent/background/store.py`：使用同步文件 I/O。
-- `nano_agent/subagents/store.py`：使用同步文件 I/O 和线程锁分配子 Agent 标识。
-- `nano_agent/tasks/service.py`：仍用 `RLock` 保护 `asyncio.to_thread()` 中执行的完整同步 TaskStore 事务。
-- `nano_agent/tasks/store.py`：使用同步文件 I/O。
-- `nano_agent/persistence/message_store.py`：仍保留同步 append/load 实现，async 方法只是边界包装。
-- config、prompt、report、summary store 仍保留同步保存实现，async 方法只是边界包装。
-- 测试、脚本和分析工具中仍可能存在同步 helper；需要区分生产路径和离线工具路径。
+- `nano_agent/background/store.py`：已纳入 async 生产路径边界。
+- `nano_agent/subagents/store.py`：已纳入 async 生产路径边界。
+- `nano_agent/tasks/service.py`：生产路径不再依赖旧同步事务兼容层。
+- `nano_agent/tasks/store.py`：已纳入 async 生产路径边界。
+- `nano_agent/persistence/message_store.py`：AgentLoop 主写入和读取路径已使用 async API。
+- config、prompt、report、summary store：顶层保存路径已建立 async boundary。
+- 测试、脚本和分析工具中的同步 helper 不属于生产运行路径。
 
 ## 迁移原则
 
@@ -221,7 +220,7 @@ hooks 顺序：
 
 ## Step 4：迁移工具内部阻塞 I/O
 
-状态：已完成一部分。
+状态：已完成。
 
 涉及模块：
 
@@ -242,14 +241,14 @@ hooks 顺序：
 重构后的结果：
 
 - Step 3 的安全 tool batch 并发不再被 `run_command` 进程等待或只读文件工具的同步 I/O 长时间阻塞。
-- 文件系统 I/O 仍保留同步实现，但同步成本被隔离到 thread boundary。
-- 后续剩余工具迁移可以按同一模式处理。
+- 文件系统 I/O 成本被隔离到明确的 async boundary。
+- 后续内置工具迁移已在 Step 7、Step 9、Step 10 和 Step 12 完成。
 
-剩余工作：
+后续处理结果：
 
-- `clone_repo` 仍需迁移到 asyncio subprocess。
-- `runtime/environment.py` 中涉及外部命令或虚拟环境准备的路径仍需迁移。
-- `edit_file`、task tools、delegate tools、activate skill、finish_run 等需要复查是否存在长时间同步 I/O，并按风险决定是否使用 `asyncio.to_thread()`。
+- `clone_repo` 已迁移到 asyncio subprocess。
+- `runtime/environment.py` 中涉及外部命令或虚拟环境准备的路径已迁移到 async subprocess。
+- `edit_file`、task tools、delegate tools、activate skill、finish_run 等路径已在后续步骤中完成 async 化或确认了异步边界。
 
 ## Step 5：抽取 HookPipeline
 
@@ -375,8 +374,8 @@ hooks 顺序：
 - `reactive_compact` 只从 LLM prompt-too-long recovery 路径调用。
 - transcript 和 checkpoint 写入通过 `CompactionStore` 的 async wrapper 移出 event loop。
 - transcript、checkpoint、tool result 持久化继续保持原子写，不改变产物格式。
-- `append_record()` 暂不迁移；它只追加小型 compaction record，统一持久化迁移留到后续步骤。
-- `MessageStore`、`TaskService`、`BackgroundStore` 暂不在本步重构，避免把状态锁和事件通知问题混入 compactor 边界整理。
+- `append_record()` 在本步保持原有语义，统一持久化迁移已在后续步骤处理。
+- `MessageStore`、`TaskService`、`BackgroundStore` 在本步不混入 compactor 边界整理，相关状态锁和事件通知问题已在后续步骤处理。
 - 不允许为了 async 化降低 tool result 落盘的完整性校验和恢复语义。
 
 重构后的结果：
@@ -385,7 +384,7 @@ hooks 顺序：
 - 三层压缩和 LLM 摘要压缩不会被错误并发。
 - prompt-too-long 恢复路径保持当前语义。
 - compactor 中较重的文件 I/O 不再阻塞 event loop。
-- task/background 相关持久化仍留给 Step 9 和 Step 10 结合状态服务一起迁移。
+- task/background 相关持久化已在 Step 9 和 Step 10 结合状态服务一起迁移。
 
 ## Step 9：迁移持久化和 TaskService
 
@@ -473,7 +472,7 @@ hooks 顺序：
 - config、prompt、report、summary 保存保留原子写语义，并通过 async wrapper 或 `asyncio.to_thread()` 移出 event loop。
 - 运行结束时确保 subagent task、外部进程和后台资源被关闭。
 - 删除任何为旧同步接口保留的生产入口。
-- MCP client 生命周期留到 Step 13 接入后统一管理。
+- MCP client 生命周期留到 `MCP.md` 中的 MCP 开发计划统一管理。
 
 重构后的结果：
 
@@ -535,58 +534,13 @@ hooks 顺序：
 - `.venv/bin/python -m compileall -q nano_agent tests` 通过。
 - 至少完成一次 CLI smoke 或等价集成测试，确认程序能创建 run、执行 loop、写入 summary/report/messages。
 
-当前检查基线：
+归档检查结果：
 
 - 未发现 `ThreadPoolExecutor`、同步 `subprocess.run`、同步 `subprocess.Popen`、`time.sleep` 的生产路径残留。
-- `threading` 仍出现在 `TaskService`、`BackgroundJobStore`、`SubagentStore` 和 cancellation token 中。
-- `asyncio.to_thread()` 仍出现在 task service、background supervisor store 调用、message/config/prompt/report/summary persistence、context compactor、文件类工具和 cancellation wait 中。
-- `read_file`、`list_files`、`grep`、`edit_file`、`activate_skill` 仍保留 `_run_sync()` 私有实现，由 async `run()` 包装。
-- Step 12 的实际代码修改应优先处理 shared state 和持久化层，再评估文件类工具是否继续保留小范围同步实现。
-
-## Step 13：MCP 按 async-first 接入
-
-涉及模块：
-
-- `nano_agent/mcp/`（新增）
-- `nano_agent/config.py`
-- `nano_agent/tools/base.py`
-- `nano_agent/agent.py`
-- MCP 相关测试
-
-重构内容：
-
-- MCP HTTP transport 使用异步 HTTP client。
-- MCP stdio transport 使用 `asyncio.create_subprocess_exec()`。
-- MCP client 初始化、`tools/list`、`tools/call`、shutdown 全部 async。
-- MCP tool adapter 实现 async `RuntimeTool.run()`。
-- MCP 工具必须设置权限、并发元数据、workspace roots 和命名空间，避免绕过现有隔离与权限模型。
-
-重构后的结果：
-
-- MCP 不引入新的同步债务。
-- MCP 工具可以参与 AgentLoop 的工具 batch 调度。
-- stdio server 和 HTTP session 生命周期由 async 资源管理统一控制。
-
-## Step 14：最终异步架构审计
-
-涉及模块：
-
-- 全部 `nano_agent/`
-- 全部 `tests/`
-
-重构内容：
-
-- 对 Step 12 和 Step 13 后的代码做全仓审计。
-- 确认同步 `complete()`、`invoke()`、`run()`、同步 hooks、同步 supervisor 等接口没有重新出现。
-- 确认 MCP stdio、HTTP、tool adapter、shutdown 路径全部 async。
-- 确认 README、AGENTS.md、开发文档中的运行模型描述与代码一致。
-- 补充最终集成测试，覆盖主 agent、subagent、context compaction、task DAG、MCP tool 调用和失败清理。
-
-重构后的结果：
-
-- 项目核心运行时彻底 async 化。
-- 同步实现不再作为生产内部兼容路径存在。
-- 后续新功能可以直接依赖统一 async 架构。
+- 生产路径不再依赖旧同步接口或线程锁兼容层。
+- `asyncio.to_thread()` 的剩余使用已逐项确认，不影响核心运行路径。
+- 文件类工具和持久化边界保持现有消息协议、原子写和崩溃恢复语义。
+- Step 12 已完成，本文档进入归档状态。
 
 ## 验证策略
 
@@ -629,7 +583,5 @@ hooks 顺序：
 10. 多 Agent 调度迁移到 asyncio。
 11. 顶层入口和资源生命周期复查。
 12. 删除同步残留并完成全 async 验收。
-13. MCP 按 async-first 接入。
-14. 最终异步架构审计。
 
 不建议把“工具并发”和“多 Agent 迁移”放到同一步。工具并发属于单轮 LLM response 内的 batch 调度问题，多 Agent 迁移属于后台 job 生命周期和状态一致性问题，两个问题应分别验证。
