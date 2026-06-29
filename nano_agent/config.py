@@ -4,6 +4,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from nano_agent.mcp.models import MCPServerConfig
+
 
 class AgentConfig(BaseModel):
     """单次 nanoAgent 进程的运行配置。"""
@@ -69,3 +71,4 @@ class AgentConfig(BaseModel):
         gt=0,
         le=120,
     )  # 主 Agent 无前台工作时等待任一后台完成事件的最大秒数。
+    mcp_servers: tuple[MCPServerConfig, ...] = ()  # 可选 MCP server 配置，默认不启用外部 MCP。

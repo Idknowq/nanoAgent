@@ -46,6 +46,69 @@
 - `MCPToolAdapter`：把 MCP tool 包装为 nanoAgent `RuntimeTool`。
 - `MCPToolRegistry`：按 server namespace 注册 MCP tools。
 
+## 开发记录
+
+### Step 1：MCP 配置模型和生命周期设计
+
+状态：已完成。
+
+本步只建立 MCP server 的配置表达和后续生命周期边界，不接入 GitHub 业务、不启动 stdio subprocess、不注册 MCP tools。
+
+已完成内容：
+
+- 新增 `nano_agent/mcp/`，定义 `MCPTransportType` 和 `MCPServerConfig`。
+- `AgentConfig` 新增 `mcp_servers`，默认空 tuple，不改变现有运行行为。
+- stdio server 配置要求 `command`，禁止 `url`。
+- HTTP server 配置要求 `url`，禁止 `command`。
+- server `name` 作为工具命名空间，只允许字母、数字、下划线和连字符。
+
+后续生命周期边界：
+
+1. `configured`
+2. `disabled` 或 `session_created`
+3. `initialized`
+4. `tools_discovered`
+5. `shutdown`
+
+下一步进入 stdio transport，实现 async subprocess、JSON-RPC request/response、超时和 shutdown。
+
+### Step 2：stdio transport
+
+状态：已完成。
+
+本步只实现 MCP stdio 传输层，不实现 `initialize`、`tools/list`、`tools/call` 语义封装，不接入 GitHub MCP server，也不注册 runtime tools。
+
+已完成内容：
+
+- 新增 JSON-RPC request、response 和 error 模型。
+- 新增 `StdioMCPTransport`，使用 `asyncio.create_subprocess_exec()` 启动本地 MCP server。
+- 支持按行写入 JSON-RPC request，并从 stdout 读取单行 JSON-RPC response。
+- 支持请求超时、server 提前退出、非法 JSON、非法 JSON-RPC response 和 response id 不匹配的错误分类。
+- `shutdown()` 支持重复调用，并按 close stdin、wait、terminate、kill 的顺序清理子进程。
+- 使用最小 mock MCP server 覆盖 stdio request/response、timeout、closed server、invalid JSON、mismatched id 和 shutdown。
+
+下一步进入 MCP client session，实现 `initialize` 和 `tools/list`，把 MCP tools 映射成 nanoAgent tool definitions。
+
+### Step 3：initialize 和 tools/list
+
+状态：已完成。
+
+本步实现 MCP session 层的初始化和工具发现，只读取 MCP server 已暴露的工具清单，不实现 GitHub API 调用、不 hardcode GitHub 工具、不执行 MCP tools，也不注册 runtime tools。
+
+已完成内容：
+
+- 新增 `MCPClientSession`，负责启动 transport、发送 `initialize`、发送 `tools/list` 和关闭 transport。
+- `initialize` 成功后发送 `notifications/initialized`，保持真实 MCP server 兼容性。
+- session 层负责递增 JSON-RPC request id，transport 仍只负责发送和接收。
+- 新增 `MCPInitializeResult`，保存协商协议版本、serverInfo、capabilities 和原始 initialize result。
+- 新增 `MCPToolDefinition`，将远端 MCP tool 映射为 nanoAgent namespaced tool definition。
+- 工具名使用 `<server>.<remote_tool>`，例如 `github.search_issues`。
+- 远端 tool name 必须是 namespace-safe 名称；非法名称作为 MCP protocol error 处理，不做静默修正。
+- JSON-RPC error 会转换为 session 层 `MCPRemoteError`。
+- 使用 mock MCP server 覆盖 initialize、tools/list、未初始化调用、远端错误、非法工具名和 request id 递增。
+
+下一步进入 `tools/call` adapter，将 MCP tool 调用接入 async `RuntimeTool.run()`。
+
 ## GitHub MCP 接入策略
 
 GitHub 是第一个具体 MCP provider，但不应把 GitHub 逻辑写死到 MCP 核心层。GitHub 接入应建立在通用 MCP 基础设施之上。
