@@ -129,6 +129,23 @@
 
 下一步进入权限分级、namespace 策略、并发元数据和 registry 接入。
 
+### Step 5：namespace、权限元数据和 registry 接入
+
+状态：已完成。
+
+本步只把已发现的 MCP tool definitions 包装成 nanoAgent `ToolRegistry` 可管理的 runtime tools，不自动接入默认工具注册表、不改 AgentLoop、不接真实 GitHub MCP server。
+
+已完成内容：
+
+- 新增 `build_mcp_tool_registry()`，将 `MCPToolDefinition` 列表转换为 `MCPToolAdapter` 并注册进 `ToolRegistry`。
+- MCP tool 使用 namespaced 工具名，例如 `github.search_issues`。
+- 复用 `ToolRegistry` 的重复名称检测，避免 MCP tool 或内置工具命名冲突被静默覆盖。
+- MCP adapter 默认元数据保持保守只读策略：`approval_level=READ`、`category=mcp`、`is_mutating=False`、`requires_workspace=False`。
+- MCP adapter 默认允许并发：`can_run_concurrently=True`，并使用 `mcp:<server_name>` 作为 conflict group。
+- 测试覆盖 registry 注册、重复名称拒绝、`ToolRegistry.specs()` 元数据和 `selected()` 行为。
+
+下一步使用最小 mock MCP server 做更接近真实运行的集成测试，然后再接 GitHub MCP server 只读 toolset。
+
 ## GitHub MCP 接入策略
 
 GitHub 是第一个具体 MCP provider，但不应把 GitHub 逻辑写死到 MCP 核心层。GitHub 接入应建立在通用 MCP 基础设施之上。
