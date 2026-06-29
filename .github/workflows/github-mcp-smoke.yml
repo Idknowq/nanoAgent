@@ -9,7 +9,7 @@ jobs:
 
     env:
       RUN_GITHUB_MCP_SMOKE: "1"
-      GITHUB_PERSONAL_ACCESS_TOKEN: ${{ secrets.GITHUB_PERSONAL_ACCESS_TOKEN }}
+      GITHUB_PERSONAL_ACCESS_TOKEN: ${{ secrets.MCP_GITHUB_PERSONAL_ACCESS_TOKEN }}
       GITHUB_MCP_DOCKER_IMAGE: ghcr.io/github/github-mcp-server
       GITHUB_TOOLSETS: context,repos,issues,pull_requests
       GITHUB_READ_ONLY: "1"
