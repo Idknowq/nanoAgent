@@ -28,12 +28,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-from nano_agent.agent import NanoAgent
-from nano_agent.config import AgentConfig
+from nano_agent.agent import NanoAgent  # noqa: E402
+from nano_agent.config import AgentConfig  # noqa: E402
 
 EXPERIMENT_DIR = PROJECT_ROOT / ".nano" / "experiments"
 
@@ -248,7 +248,7 @@ def main():
         print(f"  {variant}: {len(completed)}/{len(metas)} completed, avg {avg_dur:.0f}s")
 
     print(f"\n  Artifacts: {EXPERIMENT_DIR}")
-    print(f"  Analyze:   python3 tests/analyze_runs.py --run-dir .nano/experiments/<variant>/runs/<run_id>")
+    print("  Analyze:   python3 tests/analyze_runs.py --run-dir .nano/experiments/<variant>/runs/<run_id>")
 
 
 if __name__ == "__main__":

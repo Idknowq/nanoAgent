@@ -13,7 +13,6 @@ Usage:
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -301,7 +300,6 @@ def analyze_parallelism(run_dir: Path) -> dict:
     summary = _load_json(run_dir / "summary.json")
     jobs = _load_background_jobs(run_dir)
     llm_calls = _load_jsonl(run_dir / "llm_calls.jsonl")
-    audit = _load_jsonl(run_dir / "audit.jsonl")
 
     # Only relevant if background jobs were used
     if not jobs:
@@ -354,7 +352,6 @@ def analyze_parallelism(run_dir: Path) -> dict:
 
     # Find max concurrent jobs (how many were running at the same time)
     # Use job timestamps to calculate overlap
-    concurrent_periods = 0
     max_concurrent = 0
     if len(jobs) >= 2:
         finished_jobs = [j for j in jobs if j.get("started_at") and j.get("finished_at")]
@@ -369,8 +366,6 @@ def analyze_parallelism(run_dir: Path) -> dict:
                 except (ValueError, AttributeError):
                     pass
             if intervals:
-                min_start = min(i[0] for i in intervals)
-                max_end = max(i[1] for i in intervals)
                 # Count concurrent jobs at each job's start time
                 for start, end in intervals:
                     concurrent = sum(1 for s, e in intervals if s <= start < e)
@@ -545,7 +540,7 @@ def format_compaction_report(metrics: dict) -> str:
         f"  LLM calls:           {metrics['llm_call_count']} ({metrics['successful_llm_calls']} primary, {metrics['failed_llm_calls']} retry)",
         f"  Tool calls:          {metrics['tool_call_count']}",
         "",
-        f"  ── Compaction Pipeline ──",
+        "  ── Compaction Pipeline ──",
         f"  L1 tool_result_budget:  {l1.get('count', 0)} events, ~{l1.get('estimated_tokens_saved', 0):,} tokens saved",
         f"  L4 auto_compact:        {metrics['l4_auto_compactions']} events",
         f"  Reactive compaction:    {metrics['reactive_compactions']} events",
@@ -576,7 +571,7 @@ def format_compaction_report(metrics: dict) -> str:
 
     lines.extend([
         "",
-        f"  ── Token Metrics ──",
+        "  ── Token Metrics ──",
         f"  Total input tokens:      {metrics['total_input_tokens']:>10,}",
         f"  Total output tokens:     {metrics['total_output_tokens']:>10,}",
         f"  Total cached tokens:     {metrics['total_cached_tokens']:>10,}",
@@ -712,10 +707,6 @@ def main():
             metrics = analyze_compaction(run_dir)
             compaction_results.append(metrics)
             print("\n" + format_compaction_report(metrics))
-
-        if len(compaction_results) >= 2:
-            comp = compare_compaction(compaction_results)
-            # Will print in combined summary below
 
     # 3. Parallelism analysis
     if run_all or args.parallel_only:
