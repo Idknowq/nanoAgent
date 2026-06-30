@@ -542,6 +542,47 @@ hooks 顺序：
 - 文件类工具和持久化边界保持现有消息协议、原子写和崩溃恢复语义。
 - Step 12 已完成，本文档进入归档状态。
 
+## Step 13：清理取消信号与状态锁模型
+
+状态：已完成。
+
+目标：
+
+- 清理取消等待中的线程兼容层，使取消信号直接运行在 asyncio 模型下。
+- 将 task/background job 状态管理统一到 `asyncio.Lock`，不再混用 `threading.RLock` 与 `asyncio.to_thread()`。
+- 保持现有 task/job JSON、JSONL artifact 格式和状态流转语义不变。
+
+涉及模块：
+
+- `nano_agent/background/cancellation.py`
+- `nano_agent/loop.py`
+- `nano_agent/tasks/service.py`
+- `nano_agent/background/store.py`
+- `nano_agent/background/supervisor.py`
+- `tests/test_subagents.py`
+
+重构内容：
+
+- `CancellationToken` 使用 `asyncio.Event` 保存取消信号。
+- `AgentLoop._sleep()` 直接 await `CancellationToken.wait()`，删除 `threading.Event.wait()` 外层的 `asyncio.to_thread()`。
+- `TaskService.create/get/list/update` 使用 `asyncio.Lock` 串行化任务状态事务，删除 `_threadsafe` 过渡方法。
+- `BackgroundJobStore.next_id/get/save` 改为 async 方法，并使用 `asyncio.Lock` 串行化 job id 分配、快照写入和事件追加。
+- `BackgroundJobSupervisor` 直接 await background store，不再通过 `asyncio.to_thread()` 调用 job store。
+- 取消相关测试改为同一 event loop 内的 async 取消流程，不再使用 `ThreadPoolExecutor` 模拟旧线程模型。
+
+重构后的结果：
+
+- 取消等待不再占用 worker thread。
+- task 状态事务不再依赖 `threading.RLock`。
+- background job store 不再依赖 `threading.RLock`。
+- task/background job 层的 `asyncio.to_thread()` 残留被删除。
+
+验收标准：
+
+- `rg "threading\\.RLock|asyncio\\.to_thread\\(self\\.store|asyncio\\.to_thread\\(self\\._.*threadsafe|asyncio\\.to_thread\\(self\\.cancellation_token\\.wait" nano_agent` 无相关残留。
+- `.venv/bin/python -m pytest -q tests/test_tasks.py tests/test_background_tasks.py tests/test_subagents.py tests/test_agent_loop.py` 通过。
+- `.venv/bin/python -m ruff check nano_agent/background/cancellation.py nano_agent/background/store.py nano_agent/background/supervisor.py nano_agent/tasks/service.py nano_agent/loop.py tests/test_subagents.py` 通过。
+
 ## 验证策略
 
 每个阶段至少验证：

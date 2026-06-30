@@ -1,8 +1,6 @@
 import json
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Event
 
 import pytest
 
@@ -188,12 +186,12 @@ class BlockedSubagentLLM:
 
 class BlockingSubagentLLM:
     def __init__(self) -> None:
-        self.entered = Event()  # 标记子 Agent 已进入一次物理 LLM 调用。
-        self.release = Event()  # 允许测试在发出取消请求后释放 LLM 调用。
+        self.entered = asyncio.Event()  # 标记子 Agent 已进入一次物理 LLM 调用。
+        self.release = asyncio.Event()  # 允许测试在发出取消请求后释放 LLM 调用。
 
     async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
         self.entered.set()
-        self.release.wait(timeout=2)
+        await asyncio.wait_for(self.release.wait(), timeout=2)
         return LLMResponse(content="late response", stop_reason="end_turn")
 
 
@@ -484,12 +482,11 @@ async def test_running_subagent_stops_after_cancellation_boundary(tmp_path: Path
     )
     token = CancellationToken()
 
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(lambda: asyncio.run(manager.execute(prepared, token)))
-        assert llm.entered.wait(timeout=1)
-        token.cancel()
-        llm.release.set()
-        result = future.result(timeout=1)
+    running = asyncio.create_task(manager.execute(prepared, token))
+    await asyncio.wait_for(llm.entered.wait(), timeout=1)
+    token.cancel()
+    llm.release.set()
+    result = await asyncio.wait_for(running, timeout=1)
 
     assert result.status == SubagentStatus.CANCELLED
     assert result.error_kind == SubagentErrorKind.CANCELLED

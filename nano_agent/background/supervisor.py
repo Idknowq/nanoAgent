@@ -77,7 +77,7 @@ class BackgroundJobSupervisor:
             self.manager.validate_background_request(request)
             prepared = self.manager.prepare(request)
             job = BackgroundJob(
-                job_id=await asyncio.to_thread(self.store.next_id),
+                job_id=await self.store.next_id(),
                 subagent_id=prepared.state.subagent_id,
                 task_id=task_id,
             )
@@ -100,7 +100,7 @@ class BackgroundJobSupervisor:
                 if observe and job.status in TERMINAL_JOB_STATUSES:
                     self._observed.add(job_id)
                 return job.model_copy(deep=True)
-        return await asyncio.to_thread(self.store.get, job_id)
+        return await self.store.get(job_id)
 
     async def list(
         self,
@@ -306,7 +306,7 @@ class BackgroundJobSupervisor:
             )
 
     async def _save_job(self, job: BackgroundJob) -> None:
-        await asyncio.to_thread(self.store.save, job)
+        await self.store.save(job)
 
     def _active_jobs(self) -> list[BackgroundJob]:
         return [job for job in self._jobs.values() if job.status not in TERMINAL_JOB_STATUSES]

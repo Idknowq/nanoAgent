@@ -752,7 +752,7 @@ class AgentLoop:
         if self.cancellation_token is None:
             await self.sleeper(delay_seconds)
             return
-        if await asyncio.to_thread(self.cancellation_token.wait, delay_seconds):
+        if await self.cancellation_token.wait(delay_seconds):
             self.cancellation_token.raise_if_cancelled()
 
     async def _idle_wait(self, messages: list[AgentMessage]) -> None:

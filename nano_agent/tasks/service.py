@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from threading import RLock
 
 from nano_agent.tasks.errors import TaskError
 from nano_agent.tasks.models import TaskBlockedReason, TaskRecord, TaskStatus
@@ -14,7 +13,7 @@ class TaskService:
 
     def __init__(self, store: TaskStore) -> None:
         self.store = store  # 保存当前主运行的 Task 持久化接口。
-        self._lock = RLock()  # 串行化 Task 的读取、状态转换和依赖解锁。
+        self._lock = asyncio.Lock()  # 串行化 Task 的读取、状态转换和依赖解锁。
 
     async def create(
         self,
@@ -23,23 +22,9 @@ class TaskService:
         description: str,
         blocked_by: tuple[str, ...] = (),
     ) -> TaskRecord:
-        """Create a task without blocking the event loop."""
+        """Create a task while holding the async task-state lock."""
 
-        return await asyncio.to_thread(
-            self._create_threadsafe,
-            subject=subject,
-            description=description,
-            blocked_by=blocked_by,
-        )
-
-    def _create_threadsafe(
-        self,
-        *,
-        subject: str,
-        description: str,
-        blocked_by: tuple[str, ...] = (),
-    ) -> TaskRecord:
-        with self._lock:
+        async with self._lock:
             return self._create(
                 subject=subject,
                 description=description,
@@ -68,21 +53,15 @@ class TaskService:
         return task
 
     async def get(self, task_id: str) -> TaskRecord:
-        """Load a task without blocking the event loop."""
+        """Load a task while holding the async task-state lock."""
 
-        return await asyncio.to_thread(self._get_threadsafe, task_id)
-
-    def _get_threadsafe(self, task_id: str) -> TaskRecord:
-        with self._lock:
+        async with self._lock:
             return self.store.get(task_id)
 
     async def list(self, status: TaskStatus | None = None) -> list[TaskRecord]:
-        """List tasks without blocking the event loop."""
+        """List tasks while holding the async task-state lock."""
 
-        return await asyncio.to_thread(self._list_threadsafe, status)
-
-    def _list_threadsafe(self, status: TaskStatus | None = None) -> list[TaskRecord]:
-        with self._lock:
+        async with self._lock:
             tasks = self.store.list()
             if status is None:
                 return tasks
@@ -100,33 +79,9 @@ class TaskService:
         result: str | None = None,
         error: str | None = None,
     ) -> TaskRecord:
-        """Update a task without blocking the event loop."""
+        """Update a task while holding the async task-state lock."""
 
-        return await asyncio.to_thread(
-            self._update_threadsafe,
-            task_id,
-            subject=subject,
-            description=description,
-            status=status,
-            blocked_by=blocked_by,
-            owner=owner,
-            result=result,
-            error=error,
-        )
-
-    def _update_threadsafe(
-        self,
-        task_id: str,
-        *,
-        subject: str | None = None,
-        description: str | None = None,
-        status: TaskStatus | None = None,
-        blocked_by: tuple[str, ...] | None = None,
-        owner: str | None = None,
-        result: str | None = None,
-        error: str | None = None,
-    ) -> TaskRecord:
-        with self._lock:
+        async with self._lock:
             return self._update(
                 task_id,
                 subject=subject,

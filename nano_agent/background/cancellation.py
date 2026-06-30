@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from threading import Event
+import asyncio
 
 
 class AgentCancelledError(RuntimeError):
@@ -8,10 +8,10 @@ class AgentCancelledError(RuntimeError):
 
 
 class CancellationToken:
-    """Thread-safe cooperative cancellation signal shared with one running job."""
+    """Async cooperative cancellation signal shared with one running job."""
 
     def __init__(self) -> None:
-        self._event = Event()  # 保存当前 Job 是否收到取消请求。
+        self._event = asyncio.Event()  # 保存当前 Job 是否收到取消请求。
 
     @property
     def cancelled(self) -> bool:
@@ -24,5 +24,11 @@ class CancellationToken:
         if self.cancelled:
             raise AgentCancelledError("Background job cancellation was requested.")
 
-    def wait(self, timeout: float) -> bool:
-        return self._event.wait(timeout)
+    async def wait(self, timeout: float) -> bool:
+        """Wait until cancellation is requested or the timeout expires."""
+
+        try:
+            await asyncio.wait_for(self._event.wait(), timeout=timeout)
+        except TimeoutError:
+            return False
+        return True
