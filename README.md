@@ -1,12 +1,12 @@
 <p align="center">
   <h1 align="center">🤖 nanoAgent</h1>
   <p align="center">
-    A lightweight AI Agent for automated repository diagnosis & repair
+    A lightweight async Coding Agent for repository diagnosis, repair, and tool integration
   </p>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/python-3.11+-blue?logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/python-3.11%2B%20%7C%20CI%203.13-blue?logo=python&logoColor=white" alt="Python" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
   <img src="https://img.shields.io/badge/stability-experimental-orange" alt="Stability" />
 </p>
@@ -15,10 +15,10 @@
 
 ## 📖 Overview
 
-nanoAgent is a lightweight AI Agent prototype that pulls a GitHub repository, analyzes its
-structure, pinpoints root causes, and performs verified fixes — all within an isolated execution
+nanoAgent is a lightweight async Coding Agent prototype that pulls a Git repository, analyzes its
+structure, pinpoints root causes, and performs verified fixes within an isolated execution
 environment. The central idea is to **give the LLM tools and let it work**: it operates inside a
-controlled loop, observing, reasoning, and acting until the task is done.
+controlled loop, observing, reasoning, acting, and reporting until the task is done.
 
 Unlike a one-shot Q&A session, nanoAgent will:
 
@@ -28,9 +28,11 @@ Unlike a one-shot Q&A session, nanoAgent will:
 - 🔄 Retry on transient errors and compact context when it grows too large
 - 📋 Deliver a structured completion report with evidence, risks, and changed files
 
-Current phase: asyncio-based tool-use loops with run persistence, cache-oriented prompt
-composition, bounded one-level subagent delegation, and ongoing cleanup of remaining synchronous
-persistence boundaries.
+Current phase: the core runtime has completed its asyncio migration. `NanoAgent.run()`,
+`AgentLoop.run()`, LLM calls, runtime tools, hooks, command execution, task state transitions,
+background jobs, and subagent scheduling all run through async interfaces. MCP support is now
+available behind explicit configuration, with a built-in provider for the official GitHub MCP
+server.
 
 ---
 
@@ -47,6 +49,7 @@ persistence boundaries.
 | 🔌 **Extensible Hooks** | Permission, audit, metrics, skill injection — composable at each loop boundary |
 | 👥 **Subagent Delegation** | Background subagent jobs scheduled with `asyncio.Task`, up to 2 concurrent read-only subagents |
 | 📋 **Persistent Task Tracking** | Dependency graph (`blocked_by`), lifecycle state machine, background Job linkage |
+| 🌐 **MCP Integration** | Optional MCP runtime with stdio/http configuration and GitHub MCP provider support |
 | 📝 **Structured Reports** | Every run produces `report.md` with problem, root cause, changed files, verification, and risks |
 | 🎯 **On-Demand Skills** | Built-in Python / Node / Django / GitHub Actions domain skills, activated by the model when needed |
 
@@ -56,8 +59,9 @@ persistence boundaries.
 
 ### Prerequisites
 
-- Python ≥ 3.11
+- Python ≥ 3.11. Local development and GitHub Actions currently use Python 3.13.
 - DeepSeek API key ([get one here](https://platform.deepseek.com))
+- Docker, only when using the built-in GitHub MCP provider
 
 ### Installation
 
@@ -67,6 +71,7 @@ git clone <repo-url> && cd nanoAgent
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+pip install -e .
 ```
 
 ### Configuration
@@ -80,25 +85,39 @@ Edit `.env`:
 ```env
 DEEPSEEK_API_KEY=your_api_key_here
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-pro
+DEEPSEEK_MODEL=deepseek-v4-flash
+```
+
+Optional GitHub MCP configuration:
+
+```env
+GITHUB_MCP_DOCKER_IMAGE=ghcr.io/github/github-mcp-server
+GITHUB_PERSONAL_ACCESS_TOKEN=your_github_personal_access_token
+GITHUB_TOOLSETS=context,repos,issues,pull_requests
+GITHUB_READ_ONLY=1
 ```
 
 ### Usage
 
 ```bash
 # Basic: diagnose and fix a repository
-python -m nano_agent.cli run https://github.com/user/repo \
+nano-agent run https://github.com/user/repo \
   "Fix the failing tests in test_login.py"
 
 # Enable writes and command execution
-python -m nano_agent.cli run https://github.com/user/repo \
+nano-agent run https://github.com/user/repo \
   "Refactor error handling in utils.py" \
   --allow-write --allow-command
 
 # Custom step count and background timeout
-python -m nano_agent.cli run https://github.com/user/repo \
+nano-agent run https://github.com/user/repo \
   "Run the full test suite and fix every failure" \
   --max-steps 200 --background-idle-wait-timeout 120
+
+# Expose tools from the official GitHub MCP server
+nano-agent run https://github.com/user/repo \
+  "Search related GitHub issues before changing the code" \
+  --mcp-github
 ```
 
 When the run finishes, the terminal prints a compact summary. The full report lives at
@@ -155,6 +174,13 @@ nano_agent/
 │   ├── hook.py           #   Completion notification hook
 │   ├── cancellation.py   #   Cooperative cancellation token
 │   └── store.py          #   Job snapshot persistence
+├── mcp/                  # Model Context Protocol integration
+│   ├── manager.py        #   MCP runtime lifecycle and tool registration
+│   ├── session.py        #   MCP initialize / tools/list / tools/call session
+│   ├── transport.py      #   stdio and HTTP transports
+│   ├── tool_adapter.py   #   RuntimeTool adapter for MCP tools
+│   ├── providers.py      #   Provider registry
+│   └── github.py         #   GitHub MCP Docker provider config
 ├── tasks/                # Persistent task management
 │   ├── service.py        #   Task lifecycle service
 │   ├── store.py          #   File-based task storage
@@ -217,23 +243,50 @@ All settings live in `AgentConfig` (`nano_agent/config.py`). CLI flags override 
 
 See `nano_agent/config.py` for the full set of parameters.
 
+### MCP
+
+MCP is disabled by default. The CLI currently exposes the registered GitHub provider with
+`--mcp-github`. When enabled, nanoAgent starts the official GitHub MCP server through Docker using
+stdio transport, discovers remote tools with `tools/list`, and exposes them to the agent with
+namespaced local names such as `github__search_repositories`.
+
+| Environment Variable | Default | Description |
+|------|------|------|
+| `GITHUB_MCP_DOCKER_IMAGE` | `ghcr.io/github/github-mcp-server` | Docker image used for the official GitHub MCP server |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | required | Token passed to the MCP server process |
+| `GITHUB_TOOLSETS` | `context,repos,issues,pull_requests` | GitHub MCP toolsets to expose |
+| `GITHUB_READ_ONLY` | `1` | Keep GitHub MCP operations read-only by default |
+
+For GitHub Actions smoke tests, store the token as the repository secret
+`MCP_GITHUB_PERSONAL_ACCESS_TOKEN`; GitHub does not allow custom secret names that start with
+`GITHUB_`.
+
 ---
 
 ## 🧪 Development
 
 ```bash
 # Run all tests
-pytest
+.venv/bin/python -m pytest -q
 
 # Run a single test file
-pytest tests/test_agent_loop.py
+.venv/bin/python -m pytest -q tests/test_agent_loop.py
 
 # Run tests matching a keyword
-pytest -k "compaction"
+.venv/bin/python -m pytest -q -k "compaction"
 
 # Lint
-ruff check .
+.venv/bin/python -m ruff check .
+
+# Syntax check
+.venv/bin/python -m compileall -q nano_agent tests
 ```
+
+GitHub Actions includes two workflows:
+
+- `.github/workflows/ci.yml` runs compile checks, unit tests, and Ruff on pushes and pull requests.
+- `.github/workflows/github-mcp-smoke.yml` is manual-only and exercises the GitHub MCP integration
+  when the required secret is configured.
 
 ### Testing Approach
 
@@ -295,10 +348,13 @@ nanoAgent's production control flow is async-first:
 - Safe tool calls from the same LLM response can run concurrently while preserving tool-result order.
 - Background subagents are scheduled as `asyncio.Task` instances with independent contexts,
   compactors, message stores, and cancellation tokens.
+- Task state and background job state are serialized with `asyncio.Lock` boundaries.
+- MCP stdio servers are started with async subprocess transport; MCP sessions run through async
+  initialize, tool discovery, tool calls, and shutdown.
 
-Some file-backed stores still use temporary async boundaries around synchronous atomic writes.
-Step 12 of the refactor plan tracks removing those remaining synchronous persistence residues
-without changing artifact formats or recovery semantics.
+Some file-backed stores and filesystem-heavy tools still use `asyncio.to_thread()` around
+synchronous atomic writes or directory/file scanning. This is intentional where Python has no
+native cross-platform async file API and where preserving atomic write semantics matters.
 
 ---
 
@@ -316,6 +372,7 @@ without changing artifact formats or recovery semantics.
 
 - Only DeepSeek is supported as an LLM provider (via OpenAI-compatible protocol)
 - Subagents are limited to one level of delegation (children cannot create grandchild agents)
+- MCP provider registration is currently explicit; the CLI exposes GitHub MCP only
 - Token estimation uses a conservative character ratio, not a real tokenizer
 - Cache behavior depends on the provider's implementation details
 - Background jobs have no process-restart recovery
