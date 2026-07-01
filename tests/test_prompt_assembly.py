@@ -15,6 +15,8 @@ from nano_agent.persistence.skill_activation_store import SkillActivationStore
 from nano_agent.prompts.assembler import PromptAssembler, PromptRequest
 from nano_agent.skills.registry import SkillFormatError, SkillParser, SkillRegistry
 from nano_agent.skills.session import SkillSession
+from nano_agent.subagents.context import SubagentContextBuilder
+from nano_agent.subagents.models import SubagentRequest
 from nano_agent.tools.activate_skill import ActivateSkillTool
 from nano_agent.tools.base import ToolContext, ToolRegistry
 
@@ -94,8 +96,13 @@ async def test_prompt_assembler_keeps_stable_core_and_exposes_only_skill_metadat
     assert first.available_skill_names == ["python-repository"]
     assert "Diagnose Python failures." in catalog.content
     assert body not in "\n".join(message.content for message in first.messages)
-    assert first.prompt_version == "mvp-v2"
-    assert "Persistent Tasks are optional durable work records" in first.messages[0].content
+    assert first.prompt_version == "mvp-v3"
+    assert "Use persistent Tasks when the request naturally splits" in first.messages[0].content
+    assert "first create a Task, then call `delegate_task`" in first.messages[0].content
+    assert "Delegate a bounded, independent, read-only investigation" in (
+        first.messages[0].content
+    )
+    assert "Use GitHub MCP tools for GitHub context" in first.messages[0].content
     assert "completion notifications are injected by the runtime" in first.messages[0].content
     assert "Prefer `list_files`, `grep`, `read_file`, and `edit_file`" in (
         first.messages[0].content
@@ -103,6 +110,10 @@ async def test_prompt_assembler_keeps_stable_core_and_exposes_only_skill_metadat
     assert 'Use `"."` for the workspace root' in first.messages[0].content
     assert "Do not weaken, delete, or bypass tests" in first.messages[0].content
     assert "Skills are optional procedural guidance" in catalog.content
+    task = first.messages[-1]
+    assert task.role == "user"
+    assert "<task>" in task.content
+    assert "If the user gives a concrete file, error, command output" in task.content
 
 
 async def test_prompt_assembler_selectively_injects_memory(tmp_path: Path) -> None:
@@ -126,6 +137,25 @@ async def test_prompt_assembler_selectively_injects_memory(tmp_path: Path) -> No
     memory_message = next(message for message in bundle.messages if "<retrieved_memory>" in message.content)
     assert "Use pytest -q." in memory_message.content
     assert bundle.memory_keys == ["repo:test-command"]
+
+
+async def test_subagent_context_uses_template_with_delegated_context() -> None:
+    messages = SubagentContextBuilder().build(
+        SubagentRequest(
+            task="Find the owner of the failing parser test.",
+            context="The parent saw tests/test_parser.py fail.",
+            allowed_tools=("grep", "read_file"),
+            max_steps=3,
+            max_llm_calls=3,
+        )
+    )
+
+    assert [message.role for message in messages] == ["system", "system", "user"]
+    assert "You are a scoped subagent" in messages[0].content
+    assert "do not delegate again" in messages[0].content
+    assert "<delegated_context>" in messages[1].content
+    assert "tests/test_parser.py" in messages[1].content
+    assert "<delegated_task>" in messages[2].content
 
 
 async def test_skill_registry_parses_metadata_without_loading_body(tmp_path: Path) -> None:

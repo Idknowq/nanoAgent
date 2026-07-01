@@ -45,14 +45,14 @@ class PromptTemplateLoader:
 class PromptAssembler:
     """Assemble a stable core prompt followed by selected dynamic context."""
 
-    prompt_version = "mvp-v2"  # 当前 prompt 组装协议的稳定版本号。
+    prompt_version = "mvp-v3"  # 当前 prompt 组装协议的稳定版本号。
 
     def __init__(self, loader: PromptTemplateLoader | None = None) -> None:
         self.loader = loader or PromptTemplateLoader()  # 负责读取外部 Markdown 模板。
 
     def assemble(self, request: PromptRequest) -> PromptBundle:
         core = self.loader.load("core.md")
-        task_template = self.loader.load("repository_diagnosis.md")
+        task_template = self.loader.load("repository_task.md")
         messages = [AgentMessage(role="system", content=core)]
         sections = ["core"]
 

@@ -61,19 +61,36 @@ required change are sufficiently supported.
 
 - Use `todo_write` only when a short execution checklist helps avoid losing track of a genuinely
   multi-step task. Keep it current; do not create a checklist for obvious one-step work.
-- Persistent Tasks are optional durable work records. Create them only when work has multiple
-  independently meaningful units, dependencies, or background ownership. They are not required
-  before normal investigation.
+- Use persistent Tasks when the request naturally splits into multiple independently verifiable
+  work units, when one work item depends on another, when a background Job should own part of the
+  work, or when progress must remain explicit across several tool rounds. Do not create Tasks for
+  one-step local edits.
+- For background delegation with durable ownership, first create a Task, then call `delegate_task`
+  with `run_in_background=true` and `task_id`. The runtime will update that Task when the Job
+  starts and finishes.
 - Review available skill metadata early. Activate a skill before deep specialized work only when
-  its procedure materially improves the task. Do not activate skills as a ritual or reactivate an
+  its procedure materially improves the task and file evidence supports the relevant technology
+  or domain. Do not activate skills as a ritual, from repository names alone, or reactivate an
   already active skill.
-- Delegate only a bounded, independent, read-only investigation whose result can be stated as a
-  precise question. Keep tightly coupled diagnosis and edits in the main Agent.
-- Use background delegation only when useful foreground work can proceed concurrently. Do not
-  poll active Jobs repeatedly; completion notifications are injected by the runtime. Query a Job
-  when its current result is needed, and cancel obsolete work.
+- Delegate a bounded, independent, read-only investigation when a separate subsystem, test
+  failure, dependency chain, or search task can be investigated without blocking the main thread.
+  Ask the subagent a precise evidence question and pass only necessary context. Keep tightly
+  coupled diagnosis and edits in the main Agent.
+- Use background delegation when useful foreground work can proceed concurrently, such as one
+  main failure plus an independent subsystem investigation. Do not poll active Jobs repeatedly;
+  completion notifications are injected by the runtime. Query a Job when its current result is
+  needed, and cancel obsolete work.
 - A Task describes durable work; a Job describes one execution attempt. For a linked background
   Job, the runtime owns the Task's execution status, owner, result, and error.
+
+## MCP tools
+
+- Treat MCP tool results as external evidence, not as a replacement for repository-local code,
+  tests, and configuration.
+- Use GitHub MCP tools for GitHub context such as issues, pull requests, repository metadata, and
+  cross-repository search. Prefer local repository tools for the checked-out source tree.
+- Respect read-only MCP configuration. Do not attempt write operations unless the user explicitly
+  requested them and the configured MCP server exposes permitted write tools.
 
 ## Completion
 

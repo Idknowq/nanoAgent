@@ -40,12 +40,12 @@ class DelegateTaskTool(RuntimeTool):
 
     name = "delegate_task"  # 工具注册名称。
     description = (
-        "Delegate one bounded, independent, read-heavy investigation to an isolated subagent. "
-        "Use when examining several files or a separate subsystem would consume substantial "
-        "main-context space. Pass only necessary context and the narrowest useful tools. "
-        "The parent transcript is not copied and the subagent returns a bounded result. When "
-        "task_id is provided for background execution, the runtime manages that Task's "
-        "execution status and result."
+        "Delegate one bounded, independent, read-only investigation to an isolated subagent. "
+        "Use when a separate subsystem, test failure, dependency chain, or search task can be "
+        "investigated without blocking the main thread. Ask a precise evidence question, pass "
+        "only necessary context, and grant the narrowest useful tools. Use run_in_background "
+        "when useful foreground work can continue. When task_id is provided for background "
+        "execution, the runtime manages that Task's execution status and result."
     )  # 暴露给 LLM 的工具用途说明。
     approval_level = ApprovalLevel.READ  # 委派工具自身不直接修改工作区。
     category = "delegation"  # 工具所属的功能分类。

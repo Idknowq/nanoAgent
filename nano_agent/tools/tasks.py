@@ -42,9 +42,10 @@ class TaskCreateTool(RuntimeTool):
 
     name = "task_create"  # 工具注册名称。
     description = (
-        "Create one durable work record only when persistent tracking, independent ownership, "
-        "or a real dependency is useful. Set blocked_by for prerequisites. Normal investigation "
-        "and trivial changes do not require a Task."
+        "Create one durable work unit for multi-part repository tasks, dependency tracking, "
+        "or background ownership. Use when the request has multiple independently verifiable "
+        "parts, a subagent will own a part, or progress should remain explicit across tool "
+        "rounds. Set blocked_by for prerequisites. Do not create Tasks for one-step local edits."
     )  # 工具说明。
     approval_level = ApprovalLevel.READ  # Task 元数据写入不修改目标工作区。
     category = "task"  # 工具所属功能分类。
