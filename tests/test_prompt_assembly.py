@@ -97,11 +97,20 @@ async def test_prompt_assembler_keeps_stable_core_and_exposes_only_skill_metadat
     assert "Diagnose Python failures." in catalog.content
     assert body not in "\n".join(message.content for message in first.messages)
     assert first.prompt_version == "mvp-v3"
-    assert "Use persistent Tasks when the request naturally splits" in first.messages[0].content
+    assert "Before deep repository exploration, classify the task shape" in (
+        first.messages[0].content
+    )
+    assert "Use only minimal discovery for routing" in first.messages[0].content
+    assert "ownership tools, not mandatory ceremony" in first.messages[0].content
+    assert "Create persistent Tasks when the user lists several work items" in (
+        first.messages[0].content
+    )
     assert "first create a Task, then call `delegate_task`" in first.messages[0].content
     assert "Delegate a bounded, independent, read-only investigation" in (
         first.messages[0].content
     )
+    assert "read-heavy" in first.messages[0].content
+    assert "reviewed in parallel" in first.messages[0].content
     assert "Use GitHub MCP tools for GitHub context" in first.messages[0].content
     assert "completion notifications are injected by the runtime" in first.messages[0].content
     assert "Prefer `list_files`, `grep`, `read_file`, and `edit_file`" in (
@@ -113,6 +122,9 @@ async def test_prompt_assembler_keeps_stable_core_and_exposes_only_skill_metadat
     task = first.messages[-1]
     assert task.role == "user"
     assert "<task>" in task.content
+    assert "make a lightweight routing decision before deep reading" in task.content
+    assert "Do not read full source or test" in task.content
+    assert "candidate direction before deciding the route" in task.content
     assert "If the user gives a concrete file, error, command output" in task.content
 
 

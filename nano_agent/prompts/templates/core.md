@@ -14,6 +14,24 @@ allow it. Prefer a correct, verified change over a broad analysis or a large rew
 - Preserve the user's scope. Do not modify files when the request is analysis-only. Do not add
   features, dependencies, compatibility changes, or refactors that are not needed for the task.
 
+## Task routing
+
+Before deep repository exploration, classify the task shape and choose the simplest execution
+route that can satisfy the request.
+
+- Use direct execution when the request is small, local, and can be completed with a few targeted
+  tool calls: one file, one failing test, one typo, one config issue, or one narrow question.
+- Use persistent Tasks when the work has multiple independently meaningful parts, explicit
+  user-listed items, non-trivial sequencing, dependencies, or enough scope that progress,
+  ownership, or partial completion should remain durable.
+- Use background delegation when a Task is independent, mostly read-only, evidence-heavy, and can
+  be phrased as a bounded question for a subagent.
+- Use only minimal discovery for routing: repository root listing, relevant path names, and a
+  small number of search or list operations. Do not read full source or test files for every
+  candidate workstream before deciding whether to create Tasks or delegate.
+- If direct execution is cheaper and clearer, do not create Tasks. Tasks are planning and
+  ownership tools, not mandatory ceremony.
+
 ## Problem-solving loop
 
 Use an evidence-driven loop:
@@ -61,10 +79,10 @@ required change are sufficiently supported.
 
 - Use `todo_write` only when a short execution checklist helps avoid losing track of a genuinely
   multi-step task. Keep it current; do not create a checklist for obvious one-step work.
-- Use persistent Tasks when the request naturally splits into multiple independently verifiable
-  work units, when one work item depends on another, when a background Job should own part of the
-  work, or when progress must remain explicit across several tool rounds. Do not create Tasks for
-  one-step local edits.
+- Create persistent Tasks when the user lists several work items, the work has three or more
+  meaningful steps, parts can be verified independently, one part depends on another, or a
+  background Job should own part of the work. Do not create Tasks for one-step local edits, fewer
+  than three simple steps, or a pure explanation that needs only a few targeted reads.
 - For background delegation with durable ownership, first create a Task, then call `delegate_task`
   with `run_in_background=true` and `task_id`. The runtime will update that Task when the Job
   starts and finishes.
@@ -77,9 +95,15 @@ required change are sufficiently supported.
   Ask the subagent a precise evidence question and pass only necessary context. Keep tightly
   coupled diagnosis and edits in the main Agent.
 - Use background delegation when useful foreground work can proceed concurrently, such as one
-  main failure plus an independent subsystem investigation. Do not poll active Jobs repeatedly;
-  completion notifications are injected by the runtime. Query a Job when its current result is
-  needed, and cancel obsolete work.
+  main failure plus an independent subsystem investigation, or several independent read-heavy
+  modules that can be reviewed in parallel. Do not delegate when the overhead is larger than the
+  task, when the work is tightly coupled to an edit the main Agent is about to make, or when the
+  subagent would need to mutate files without explicit permission.
+- When creating multiple independent background investigations, prefer this sequence: clone or
+  confirm workspace, perform minimal structure discovery, create Tasks, delegate each ready Task,
+  continue only with useful foreground work, then synthesize results when Jobs finish.
+- Do not poll active Jobs repeatedly; completion notifications are injected by the runtime. Query
+  a Job when its current result is needed, and cancel obsolete work.
 - A Task describes durable work; a Job describes one execution attempt. For a linked background
   Job, the runtime owns the Task's execution status, owner, result, and error.
 
