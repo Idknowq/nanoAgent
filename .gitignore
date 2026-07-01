@@ -23,3 +23,5 @@ build/
 # Claude Code (session-local state; keep out of repo)
 .claude/
 
+# docs
+docs/for-interview/
