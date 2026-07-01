@@ -1,7 +1,6 @@
 from io import StringIO
 from pathlib import Path
 
-import pytest
 from rich.console import Console
 
 from nano_agent.config import AgentConfig
@@ -12,7 +11,7 @@ from nano_agent.hooks.console import (
     ConsoleSection,
     RichConsoleRenderer,
 )
-from nano_agent.hooks.permission import PermissionDeniedError, PermissionHook, PermissionPolicy
+from nano_agent.hooks.permission import PermissionHook, PermissionPolicy
 from nano_agent.loop import AgentLoop
 from nano_agent.models import AgentMessage, LLMResponse, LLMUsage, RunSummary, ToolUseRequest
 from nano_agent.tools.base import ToolContext, ToolRegistry, ToolResult
@@ -58,7 +57,13 @@ class FailingRenderer:
 
 
 class RiskyCommandLLM:
+    def __init__(self) -> None:
+        self.calls = 0
+
     async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        if self.calls > 1:
+            return LLMResponse(content="done", stop_reason="end_turn")
         return LLMResponse(
             stop_reason="tool_use",
             tool_uses=[
@@ -255,17 +260,17 @@ async def test_permission_rejection_renders_error_without_tool_running(tmp_path:
         hooks=[PermissionHook(PermissionPolicy()), console_hook],
     )
 
-    with pytest.raises(PermissionDeniedError):
-        await loop.run(
-            RunSummary(run_id=context.run_id, repo_url=context.repo_url),
-            [AgentMessage(role="user", content="start")],
-        )
+    result = await loop.run(
+        RunSummary(run_id=context.run_id, repo_url=context.repo_url),
+        [AgentMessage(role="user", content="start")],
+    )
 
     event_types = [event.type for event in renderer.events]
-    assert event_types == [
+    assert result.status == "completed"
+    assert event_types[:3] == [
         ConsoleEventType.LLM_STARTED,
         ConsoleEventType.LLM_COMPLETED,
         ConsoleEventType.ERROR,
     ]
     assert ConsoleEventType.TOOL_STARTED not in event_types
-    assert "PermissionDeniedError" in str(renderer.events[-1].result_summary)
+    assert "PermissionDeniedError" in str(renderer.events[2].result_summary)

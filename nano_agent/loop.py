@@ -9,6 +9,7 @@ from nano_agent.config import AgentConfig
 from nano_agent.background.cancellation import AgentCancelledError, CancellationToken
 from nano_agent.context.compactor import ContextCompactor
 from nano_agent.hooks.base import AgentHook
+from nano_agent.hooks.permission import PermissionDeniedError
 from nano_agent.hooks.pipeline import HookPipeline
 from nano_agent.models import (
     AgentMessage,
@@ -366,30 +367,44 @@ class AgentLoop:
                 )
             ]
 
+        ordered_calls: list[_PreparedToolInvocation | _ToolExecutionOutcome] = []
         prepared: list[_PreparedToolInvocation] = []
         try:
             for tool_use in tool_uses:
                 tool = self.tools.get(tool_use.name)
                 self._raise_if_cancelled()
                 hook_messages: list[AgentMessage] = []
-                await self.hook_pipeline.before_tool_call(
-                    hook_messages, self.context, tool, tool_use
-                )
-                prepared.append(
-                    _PreparedToolInvocation(
-                        tool_use=tool_use,
-                        tool=tool,
-                        hook_messages=hook_messages,
+                try:
+                    await self.hook_pipeline.before_tool_call(
+                        hook_messages, self.context, tool, tool_use
                     )
+                except PermissionDeniedError as exc:
+                    await self.hook_pipeline.on_error(self.context, exc)
+                    ordered_calls.append(
+                        self._tool_failure_outcome(
+                            tool_use,
+                            result=self._permission_denied_result(tool.name, exc),
+                            approval_level=tool.approval_level,
+                        )
+                    )
+                    continue
+                prepared_call = _PreparedToolInvocation(
+                    tool_use=tool_use,
+                    tool=tool,
+                    hook_messages=hook_messages,
                 )
+                prepared.append(prepared_call)
+                ordered_calls.append(prepared_call)
         except Exception as exc:
             await self.hook_pipeline.on_error(self.context, exc)
             raise
 
         async def invoke(prepared_call: _PreparedToolInvocation) -> tuple[ToolResult, float]:
-            started = time.monotonic()
-            result = await prepared_call.tool.invoke(prepared_call.tool_use.input, self.context)
-            return result, time.monotonic() - started
+            return await self._invoke_tool_safely(
+                prepared_call.tool,
+                prepared_call.tool_use,
+                time.monotonic(),
+            )
 
         tasks = [asyncio.create_task(invoke(prepared_call)) for prepared_call in prepared]
         try:
@@ -401,19 +416,26 @@ class AgentLoop:
             await asyncio.gather(*tasks, return_exceptions=True)
             await self.hook_pipeline.on_error(self.context, exc)
             raise
+        result_by_tool_call_id = {
+            prepared_call.tool_use.id: result
+            for prepared_call, result in zip(prepared, results, strict=True)
+        }
 
         outcomes: list[_ToolExecutionOutcome] = []
         try:
-            for prepared_call, (result, duration) in zip(prepared, results, strict=True):
-                completion_report: CompletionReport | None = None
-                if isinstance(prepared_call.tool, FinishRunTool) and result.success:
-                    result, completion_report = self._validate_completion(
-                        result,
-                        finish_is_exclusive=finish_is_exclusive,
-                    )
-                await self.hook_pipeline.after_tool_call(
+            for ordered_call in ordered_calls:
+                if isinstance(ordered_call, _ToolExecutionOutcome):
+                    outcomes.append(ordered_call)
+                    continue
+                prepared_call = ordered_call
+                result, duration = result_by_tool_call_id[prepared_call.tool_use.id]
+                result, completion_report = await self._validate_completion_safely(
+                    prepared_call.tool,
+                    result,
+                    finish_is_exclusive=finish_is_exclusive,
+                )
+                await self._after_tool_call_safely(
                     prepared_call.hook_messages,
-                    self.context,
                     prepared_call.tool,
                     prepared_call.tool_use,
                     result,
@@ -472,19 +494,26 @@ class AgentLoop:
         completion_report: CompletionReport | None = None
         try:
             self._raise_if_cancelled()
-            await self.hook_pipeline.before_tool_call(
-                hook_messages, self.context, tool, tool_use
-            )
-            result = await tool.invoke(tool_use.input, self.context)
-            if isinstance(tool, FinishRunTool) and result.success:
-                result, completion_report = self._validate_completion(
-                    result,
-                    finish_is_exclusive=finish_is_exclusive,
+            try:
+                await self.hook_pipeline.before_tool_call(
+                    hook_messages, self.context, tool, tool_use
                 )
-            duration = time.monotonic() - started
-            await self.hook_pipeline.after_tool_call(
+            except PermissionDeniedError as exc:
+                await self.hook_pipeline.on_error(self.context, exc)
+                result = self._permission_denied_result(tool.name, exc)
+                return self._tool_failure_outcome(
+                    tool_use,
+                    result=result,
+                    approval_level=tool.approval_level,
+                )
+            result, duration = await self._invoke_tool_safely(tool, tool_use, started)
+            result, completion_report = await self._validate_completion_safely(
+                tool,
+                result,
+                finish_is_exclusive=finish_is_exclusive,
+            )
+            await self._after_tool_call_safely(
                 hook_messages,
-                self.context,
                 tool,
                 tool_use,
                 result,
@@ -502,6 +531,90 @@ class AgentLoop:
             duration=duration,
             completion_report=completion_report,
             hook_messages=hook_messages,
+        )
+
+    async def _validate_completion_safely(
+        self,
+        tool: RuntimeTool,
+        result: ToolResult,
+        *,
+        finish_is_exclusive: bool,
+    ) -> tuple[ToolResult, CompletionReport | None]:
+        """Validate finish_run output without letting malformed tool data stop the run."""
+        if not isinstance(tool, FinishRunTool) or not result.success:
+            return result, None
+        try:
+            return self._validate_completion(
+                result,
+                finish_is_exclusive=finish_is_exclusive,
+            )
+        except AgentCancelledError:
+            raise
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self.hook_pipeline.on_error(self.context, exc)
+            return self._tool_runtime_error_result(exc), None
+
+    async def _invoke_tool_safely(
+        self,
+        tool: RuntimeTool,
+        tool_use: ToolUseRequest,
+        started: float,
+    ) -> tuple[ToolResult, float]:
+        """Invoke a tool and convert unexpected runtime failures to tool results."""
+        try:
+            result = await tool.invoke(tool_use.input, self.context)
+            return result, time.monotonic() - started
+        except AgentCancelledError:
+            raise
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self.hook_pipeline.on_error(self.context, exc)
+            return self._tool_runtime_error_result(exc), time.monotonic() - started
+
+    async def _after_tool_call_safely(
+        self,
+        target: list[AgentMessage],
+        tool: RuntimeTool,
+        tool_use: ToolUseRequest,
+        result: ToolResult,
+        duration: float,
+    ) -> None:
+        """Run post-tool hooks without discarding an already completed tool result."""
+        try:
+            await self.hook_pipeline.after_tool_call(
+                target,
+                self.context,
+                tool,
+                tool_use,
+                result,
+                duration,
+            )
+        except AgentCancelledError:
+            raise
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self.hook_pipeline.on_error(self.context, exc)
+
+    @staticmethod
+    def _permission_denied_result(tool_name: str, error: PermissionDeniedError) -> ToolResult:
+        """Convert a policy rejection into a normal tool result."""
+        return ToolResult.failure(
+            code="permission_denied",
+            message=str(error) or f"Tool '{tool_name}' was denied by policy.",
+            data={"tool_name": tool_name},
+        )
+
+    @staticmethod
+    def _tool_runtime_error_result(error: Exception) -> ToolResult:
+        """Convert an unexpected tool exception into a normal tool result."""
+        return ToolResult.failure(
+            code="tool_runtime_error",
+            message=f"{type(error).__name__}: {error}",
+            data={"exception_type": type(error).__name__},
         )
 
     def _tool_success_outcome(

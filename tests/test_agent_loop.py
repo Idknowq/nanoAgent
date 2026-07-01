@@ -7,7 +7,6 @@ import pytest
 from nano_agent.config import AgentConfig
 from nano_agent.context.compactor import CompactionStore, ContextCompactor
 from nano_agent.hooks.base import HookResult, NoOpHook
-from nano_agent.hooks.permission import PermissionDeniedError
 from nano_agent.hooks.registry import build_default_hooks
 from nano_agent.loop import AgentLoop
 from nano_agent.models import AgentMessage, LLMResponse, RunSummary, ToolUseRequest
@@ -117,6 +116,28 @@ class ReminderHook(NoOpHook):
         )
 
 
+class FailingAfterToolHook(NoOpHook):
+    """Hook that fails after a tool result already exists."""
+
+    def __init__(self) -> None:
+        self.errors: list[str] = []  # Errors observed through on_error.
+
+    async def after_tool_call(  # type: ignore[no-untyped-def]
+        self,
+        context,
+        tool,
+        tool_use,
+        result,
+        duration_seconds,
+    ):
+        del context, tool, tool_use, result, duration_seconds
+        raise RuntimeError("after tool failed")
+
+    async def on_error(self, context, error):  # type: ignore[no-untyped-def]
+        del context
+        self.errors.append(str(error))
+
+
 class FailingBeforeLLMHook(NoOpHook):
     """Hook that fails before the LLM request and records error notification."""
 
@@ -153,6 +174,17 @@ class OrderedTool(RuntimeTool):
         del input_data, context
         self.events.append("tool_run")
         return ToolResult(success=True, summary="ordered", data={"ok": True})
+
+
+class BrokenRuntimeTool(RuntimeTool):
+    """Test tool that raises an unexpected runtime exception."""
+
+    name = "broken_runtime"
+    description = "Raise an unexpected runtime error."
+
+    async def run(self, input_data, context):  # type: ignore[no-untyped-def]
+        del input_data, context
+        raise RuntimeError("tool exploded")
 
 
 class ConcurrentReadTool(RuntimeTool):
@@ -494,6 +526,55 @@ async def test_agent_loop_runs_safe_tool_batch_concurrently_in_message_order(
     assert tool.max_active == 2
     assert result.status == "completed"
     assert [record.tool_call_id for record in result.tool_calls] == ["read-a", "read-b"]
+    tool_messages = [message for message in result.messages if message.role == "tool"]
+    assert [message.tool_call_id for message in tool_messages] == ["read-a", "read-b"]
+    assert [
+        json.loads(message.content)["data"]["label"] for message in tool_messages
+    ] == ["a", "b"]
+
+
+async def test_agent_loop_keeps_concurrent_results_when_after_tool_hook_fails(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+    tool = ConcurrentReadTool(events, started, release)
+    tool_uses = [
+        ToolUseRequest(id="read-a", name=tool.name, input={"label": "a"}),
+        ToolUseRequest(id="read-b", name=tool.name, input={"label": "b"}),
+    ]
+    config = AgentConfig(workspace_root=tmp_path)
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
+        config=config,
+    )
+    hook = FailingAfterToolHook()
+    loop = AgentLoop(
+        config=config,
+        llm=MultiToolLLM(tool_uses),  # type: ignore[arg-type]
+        tools=ToolRegistry([tool]),
+        context=context,
+        hooks=[hook],
+    )
+
+    task = asyncio.create_task(
+        loop.run(
+            RunSummary(run_id="test", repo_url=context.repo_url),
+            [AgentMessage(role="user", content="start")],
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    release.set()
+    result = await asyncio.wait_for(task, timeout=1)
+
+    assert result.status == "completed"
+    assert hook.errors == ["after tool failed", "after tool failed"]
     tool_messages = [message for message in result.messages if message.role == "tool"]
     assert [message.tool_call_id for message in tool_messages] == ["read-a", "read-b"]
     assert [
@@ -1059,6 +1140,71 @@ async def test_agent_loop_appends_hook_reminders_after_tool_results(tmp_path: Pa
     assert result.messages[3].content == "Reminder for run_command"
 
 
+async def test_agent_loop_returns_tool_failure_for_unexpected_tool_exception(
+    tmp_path: Path,
+) -> None:
+    config = AgentConfig(workspace_root=tmp_path)
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
+        config=config,
+    )
+    loop = AgentLoop(
+        config=config,
+        llm=InvalidToolUseLLM(BrokenRuntimeTool.name, {}),  # type: ignore[arg-type]
+        tools=ToolRegistry([BrokenRuntimeTool()]),
+        context=context,
+    )
+
+    result = await loop.run(
+        RunSummary(run_id="test", repo_url=context.repo_url),
+        [AgentMessage(role="user", content="start")],
+    )
+
+    assert result.status == "completed"
+    tool_message = next(message for message in result.messages if message.role == "tool")
+    payload = json.loads(tool_message.content)
+    assert payload["success"] is False
+    assert payload["error_code"] == "tool_runtime_error"
+    assert payload["data"]["exception_type"] == "RuntimeError"
+    assert result.tool_calls[0].success is False
+
+
+async def test_agent_loop_keeps_single_tool_result_when_after_tool_hook_fails(
+    tmp_path: Path,
+) -> None:
+    config = AgentConfig(workspace_root=tmp_path, command_timeout_seconds=5, allow_command=True)
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
+        config=config,
+    )
+    hook = FailingAfterToolHook()
+    loop = AgentLoop(
+        config=config,
+        llm=OneToolUseLLM(),  # type: ignore[arg-type]
+        tools=ToolRegistry([RunCommandTool()]),
+        context=context,
+        hooks=[hook],
+    )
+
+    result = await loop.run(
+        RunSummary(run_id="test", repo_url=context.repo_url),
+        [AgentMessage(role="user", content="start")],
+    )
+
+    assert result.status == "completed"
+    assert hook.errors == ["after tool failed"]
+    tool_message = next(message for message in result.messages if message.role == "tool")
+    payload = json.loads(tool_message.content)
+    assert payload["success"] is True
+    assert result.tool_calls[0].success is True
+
+
 async def test_default_tool_registry_exposes_metadata(tmp_path: Path) -> None:
     config = AgentConfig(workspace_root=tmp_path)
     context = ToolContext(
@@ -1100,8 +1246,15 @@ async def test_permission_hook_rejects_unapproved_command(tmp_path: Path) -> Non
     )
     run = RunSummary(run_id="test", repo_url="https://example.com/repo.git")
 
-    with pytest.raises(PermissionDeniedError):
-        await loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
+    result = await loop.run(run=run, initial_messages=[AgentMessage(role="user", content="start")])
+
+    assert result.status == "completed"
+    tool_message = next(message for message in result.messages if message.role == "tool")
+    payload = json.loads(tool_message.content)
+    assert payload["success"] is False
+    assert payload["error_code"] == "permission_denied"
+    assert "requires approval level" in payload["error_message"]
+    assert result.tool_calls[0].success is False
 
 
 async def test_permission_hook_allows_command_when_enabled(tmp_path: Path) -> None:
