@@ -442,6 +442,10 @@ async def test_subagent_manager_enforces_configured_budgets(tmp_path: Path) -> N
         )
 
 
+def test_subagent_default_step_budget_is_100() -> None:
+    assert AgentConfig().subagent_max_steps == 100
+
+
 async def test_background_subagent_rejects_non_read_only_tool(tmp_path: Path) -> None:
     config = AgentConfig(
         workspace_root=tmp_path,
@@ -465,8 +469,13 @@ async def test_background_subagent_rejects_non_read_only_tool(tmp_path: Path) ->
         max_llm_calls=3,
     )
 
-    with pytest.raises(ValueError, match="read-only filesystem"):
+    with pytest.raises(ValueError) as captured:
         manager.validate_background_request(request)
+    message = str(captured.value)
+    assert "cannot use these tools: run_command" in message
+    assert "Allowed background tools are:" in message
+    assert "read_file" in message
+    assert "Omit allowed_tools" in message
 
 
 async def test_running_subagent_stops_after_cancellation_boundary(tmp_path: Path) -> None:
@@ -567,6 +576,20 @@ async def test_subagent_corrects_invalid_finalization_once(tmp_path: Path) -> No
     assert result.llm_calls_used == 3
     assert llm.final_tool_sets == [{"finish_run"}, {"finish_run"}]
     assert llm.saw_correction_prompt
+    records = [
+        json.loads(line)
+        for line in (Path(result.run_dir) / result.messages_path)
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assistant_call_ids = [
+        record["llm_call_id"]
+        for record in records
+        if record["message"]["role"] == "assistant"
+    ]
+    assert "llm-2" in assistant_call_ids
+    assert "llm-2-finalization-correction-1" in assistant_call_ids
+    assert len(assistant_call_ids) == len(set(assistant_call_ids))
 
 
 async def test_subagent_fails_after_invalid_finalization_correction(tmp_path: Path) -> None:

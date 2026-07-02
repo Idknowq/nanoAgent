@@ -146,10 +146,15 @@ class AgentLoop:
                 summary_calls = self.compactor.summary_llm_call_count
                 messages = await self.compactor.prepare(messages, tool_specs)
                 run.llm_call_count += self.compactor.summary_llm_call_count - summary_calls
+            initial_attempt_type, initial_attempt_index = self._initial_attempt(
+                finalization_correction=finalization_correction,
+            )
             response, messages, deferred_hook_messages = await self._call_llm_with_recovery(
                 run,
                 messages,
                 tool_specs,
+                initial_attempt_type=initial_attempt_type,
+                initial_attempt_index=initial_attempt_index,
             )
             self._raise_if_cancelled()
 
@@ -690,13 +695,16 @@ class AgentLoop:
         run: RunSummary,
         messages: list[AgentMessage],
         tool_specs: list[ToolSpec],
+        *,
+        initial_attempt_type: str = "primary",
+        initial_attempt_index: int = 0,
     ) -> tuple[LLMResponse, list[AgentMessage], list[AgentMessage]]:
         transient_retries = 0
         continuation_count = 0
         reactive_used = False
         invalid_response_used = False
-        attempt_type = "primary"
-        attempt_index = 0
+        attempt_type = initial_attempt_type
+        attempt_index = initial_attempt_index
         recovered_from: str | None = None
         retry_delay: float | None = None
 
@@ -915,6 +923,17 @@ class AgentLoop:
         if attempt_type == "primary":
             return base
         return f"{base}-{attempt_type}-{attempt_index}"
+
+    @staticmethod
+    def _initial_attempt(
+        *,
+        finalization_correction: bool,
+    ) -> tuple[str, int]:
+        """Return the first LLM attempt label for a loop iteration."""
+
+        if finalization_correction:
+            return "finalization-correction", 1
+        return "primary", 0
 
     @staticmethod
     def _continuation_prompt(response: LLMResponse) -> str:

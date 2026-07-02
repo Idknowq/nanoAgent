@@ -54,7 +54,7 @@ class AgentConfig(BaseModel):
     llm_retry_jitter_seconds: float = Field(default=1.0, ge=0)  # 退避随机抖动上限。
     llm_max_continuations: int = Field(default=2, ge=0, le=5)  # 输出截断后的最大续写次数。
     subagents_enabled: bool = True  # 是否向主 Agent 暴露同步任务委派工具。
-    subagent_max_steps: int = Field(default=50, ge=1, le=100)  # 单个子 Agent 最大循环步数。
+    subagent_max_steps: int = Field(default=100, ge=1, le=100)  # 单个子 Agent 最大循环步数。
     subagent_max_llm_calls: int = Field(default=75, ge=1, le=200)  # 子 Agent LLM 调用预算。
     subagent_max_task_chars: int = Field(default=4_000, ge=1)  # 委派任务文本长度上限。
     subagent_max_context_chars: int = Field(default=16_000, ge=0)  # 显式背景信息长度上限。

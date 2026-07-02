@@ -110,9 +110,12 @@ class SubagentManager:
         names = set(request.allowed_tools or self.config.subagent_default_tools)
         denied = names - self.background_tool_names
         if denied:
+            allowed = ", ".join(sorted(self.background_tool_names)) or "none"
             raise ValueError(
-                "Background subagents can use only read-only filesystem tools: "
+                "Background subagents cannot use these tools: "
                 + ", ".join(sorted(denied))
+                + f". Allowed background tools are: {allowed}. "
+                "Omit allowed_tools to use the default read-only set."
             )
 
     async def execute(
