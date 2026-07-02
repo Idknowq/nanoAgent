@@ -69,7 +69,7 @@ If the job is terminal:
 
 ### `delegated_task_wait`
 
-Add a dedicated wait tool instead of overloading list.
+Implemented as a dedicated wait tool instead of overloading list.
 
 Suggested input:
 
@@ -88,6 +88,15 @@ Suggested behavior:
 - Return active job status summaries on timeout.
 - Mark only returned terminal results as observed.
 - Do not repeat already delivered terminal results.
+
+Current implementation:
+
+- `timeout_seconds` is capped by `background_idle_wait_timeout_seconds`.
+- `job_ids` can restrict which jobs the wait consumes.
+- `completed_jobs` contains newly delivered terminal results.
+- `active_jobs` contains lightweight active job status without result payloads.
+- Completion events returned by wait are marked observed, so the background completion hook does
+  not inject the same result again.
 
 This gives the LLM an explicit alternative to polling:
 
@@ -221,11 +230,16 @@ Omit allowed_tools to use the default read-only set.
 
 ## Suggested Development Order
 
-1. Fix the background allowed-tools error message.
-2. Make finalization/correction LLM call ids unique.
-3. Add `delegated_task_wait` with bounded timeout.
-4. Make `delegated_task_list` status-only by default.
-5. Refine observed/delivered semantics across hook injection, wait, list, and get.
-6. Tighten continuation behavior for non-tool-call `max_tokens`.
-7. Re-run the Django stress scenario and compare cache hit rate, message growth, and repeated
+Completed:
+
+- Fixed the background allowed-tools error message.
+- Made finalization correction LLM call ids unique.
+- Added `delegated_task_wait` with bounded timeout.
+
+Remaining:
+
+1. Make `delegated_task_list` status-only by default.
+2. Refine observed/delivered semantics across hook injection, wait, list, and get.
+3. Tighten continuation behavior for non-tool-call `max_tokens`.
+4. Re-run the Django stress scenario and compare cache hit rate, message growth, and repeated
    background result delivery.

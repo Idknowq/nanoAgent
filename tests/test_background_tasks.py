@@ -28,6 +28,7 @@ from nano_agent.tools.base import ToolContext
 from nano_agent.tools.delegate_task import (
     DelegatedTaskGetTool,
     DelegatedTaskListTool,
+    DelegatedTaskWaitTool,
     DelegateTaskTool,
 )
 from nano_agent.tools.finish_run import FinishRunTool
@@ -301,6 +302,68 @@ async def test_supervisor_idle_wait_unblocks_when_any_job_completes(tmp_path: Pa
     manager.release.set()
 
     assert await asyncio.wait_for(waiting, timeout=1)
+    await supervisor.shutdown()
+
+
+async def test_delegated_task_wait_returns_new_completion_once(tmp_path: Path) -> None:
+    manager = ControlledSubagentManager()
+    supervisor = make_supervisor(tmp_path, manager)
+    context = ToolContext(
+        run_id="run",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "run",
+        config=AgentConfig(),
+    )
+    job = await supervisor.submit(make_request("inspect"))
+    await asyncio.wait_for(manager.started.get(), timeout=1)
+
+    waiting = asyncio.create_task(
+        DelegatedTaskWaitTool(supervisor).invoke({"timeout_seconds": 1}, context)
+    )
+    await asyncio.sleep(0)
+    manager.release.set()
+    result = await asyncio.wait_for(waiting, timeout=1)
+    hook_result = await BackgroundCompletionHook(supervisor).before_llm_call(None, [], [])  # type: ignore[arg-type]
+
+    assert result.success
+    assert result.data["timeout"] is False
+    assert [item["job_id"] for item in result.data["completed_jobs"]] == [job.job_id]
+    assert result.data["completed_jobs"][0]["result"]["completion_report"][
+        "verification_summary"
+    ] == "Reviewed relevant files."
+    assert result.data["active_jobs"] == []
+    assert hook_result is None
+    await supervisor.shutdown()
+
+
+async def test_delegated_task_wait_timeout_returns_active_status_only(
+    tmp_path: Path,
+) -> None:
+    manager = ControlledSubagentManager()
+    supervisor = make_supervisor(tmp_path, manager)
+    context = ToolContext(
+        run_id="run",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "run",
+        config=AgentConfig(background_idle_wait_timeout_seconds=0.01),
+    )
+    job = await supervisor.submit(make_request("inspect"))
+    await asyncio.wait_for(manager.started.get(), timeout=1)
+
+    result = await DelegatedTaskWaitTool(supervisor).invoke(
+        {"timeout_seconds": 10},
+        context,
+    )
+
+    assert result.success
+    assert result.data["timeout"] is True
+    assert result.data["completed_jobs"] == []
+    assert [item["job_id"] for item in result.data["active_jobs"]] == [job.job_id]
+    assert "result" not in result.data["active_jobs"][0]
+    manager.release.set()
+    await wait_terminal(supervisor, job.job_id)
     await supervisor.shutdown()
 
 

@@ -34,6 +34,7 @@ from nano_agent.tools.delegate_task import (
     DelegatedTaskCancelTool,
     DelegatedTaskGetTool,
     DelegatedTaskListTool,
+    DelegatedTaskWaitTool,
     DelegateTaskTool,
 )
 from nano_agent.tools.finish_run import FinishRunTool
@@ -138,6 +139,7 @@ class NanoAgent:
                 tools.register(DelegateTaskTool(manager, supervisor))
                 tools.register(DelegatedTaskGetTool(supervisor))
                 tools.register(DelegatedTaskListTool(supervisor))
+                tools.register(DelegatedTaskWaitTool(supervisor))
                 tools.register(DelegatedTaskCancelTool(supervisor))
                 tools.replace(FinishRunTool(supervisor.has_active_jobs))
                 hooks.insert(1, BackgroundCompletionHook(supervisor))

@@ -123,15 +123,22 @@ class BackgroundJobSupervisor:
                 )
             return [job.model_copy(deep=True) for job in jobs]
 
-    async def wait_for_completion(self, timeout: float) -> bool:
+    async def wait_for_completion(
+        self,
+        timeout: float,
+        job_ids: set[str] | None = None,
+    ) -> bool:
         """Wait until any unobserved job reaches a terminal state."""
 
+        def has_matching_event() -> bool:
+            return self._has_unobserved_event(job_ids)
+
         async with self._completion:
-            if self._has_unobserved_event():
+            if has_matching_event():
                 return True
             try:
                 await asyncio.wait_for(
-                    self._completion.wait_for(self._has_unobserved_event),
+                    self._completion.wait_for(has_matching_event),
                     timeout=timeout,
                 )
             except TimeoutError:
@@ -160,14 +167,25 @@ class BackgroundJobSupervisor:
             await self._complete(job_id, result)
         return await self.get(job_id)
 
-    async def drain_events(self) -> list[BackgroundCompletionEvent]:
+    async def drain_events(
+        self,
+        job_ids: set[str] | None = None,
+    ) -> list[BackgroundCompletionEvent]:
         """Return terminal job events that have not yet been observed."""
 
         async with self._lock:
             events = [
-                event for event in self._events if event.job_id not in self._observed
+                event
+                for event in self._events
+                if event.job_id not in self._observed
+                and (job_ids is None or event.job_id in job_ids)
             ]
-            self._events.clear()
+            self._events = deque(
+                event
+                for event in self._events
+                if event.job_id in self._observed
+                or (job_ids is not None and event.job_id not in job_ids)
+            )
             self._observed.update(event.job_id for event in events)
             return events
 
@@ -311,8 +329,12 @@ class BackgroundJobSupervisor:
     def _active_jobs(self) -> list[BackgroundJob]:
         return [job for job in self._jobs.values() if job.status not in TERMINAL_JOB_STATUSES]
 
-    def _has_unobserved_event(self) -> bool:
-        return any(event.job_id not in self._observed for event in self._events)
+    def _has_unobserved_event(self, job_ids: set[str] | None = None) -> bool:
+        return any(
+            event.job_id not in self._observed
+            and (job_ids is None or event.job_id in job_ids)
+            for event in self._events
+        )
 
     def _require_job(self, job_id: str) -> BackgroundJob:
         job = self._jobs.get(job_id)

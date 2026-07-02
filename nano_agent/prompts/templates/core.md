@@ -102,8 +102,10 @@ required change are sufficiently supported.
 - When creating multiple independent background investigations, prefer this sequence: clone or
   confirm workspace, perform minimal structure discovery, create Tasks, delegate each ready Task,
   continue only with useful foreground work, then synthesize results when Jobs finish.
-- Do not poll active Jobs repeatedly; completion notifications are injected by the runtime. Query
-  a Job when its current result is needed, and cancel obsolete work.
+- Do not poll active Jobs repeatedly. If useful foreground work remains, continue it. If no useful
+  foreground work remains, call `delegated_task_wait` with a bounded timeout; runtime
+  completion notifications are injected by the runtime. Query a specific Job only when its
+  current result is needed, and cancel obsolete work.
 - A Task describes durable work; a Job describes one execution attempt. For a linked background
   Job, the runtime owns the Task's execution status, owner, result, and error.
 

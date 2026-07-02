@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from collections import Counter
+from typing import Literal
 
 from pydantic import Field
 
-from nano_agent.background.models import BackgroundJob, BackgroundJobStatus
+from nano_agent.background.models import (
+    TERMINAL_JOB_STATUSES,
+    BackgroundJob,
+    BackgroundJobStatus,
+)
 from nano_agent.background.presentation import public_job_data, public_subagent_result
 from nano_agent.background.supervisor import BackgroundJobSupervisor
 from nano_agent.models import ApprovalLevel
@@ -29,6 +34,12 @@ class DelegatedTaskGetInput(ToolInput):
 
 class DelegatedTaskListInput(ToolInput):
     status: BackgroundJobStatus | None = None  # 可选的 Job 状态过滤条件。
+
+
+class DelegatedTaskWaitInput(ToolInput):
+    timeout_seconds: float = Field(default=30.0, gt=0)  # 等待后台进展的最长秒数。
+    job_ids: tuple[str, ...] = ()  # 可选的 Job 子集；为空时等待任一后台 Job。
+    return_when: Literal["any_completed"] = "any_completed"  # 当前仅支持任一 Job 完成即返回。
 
 
 class DelegatedTaskCancelInput(ToolInput):
@@ -195,6 +206,64 @@ class DelegatedTaskListTool(RuntimeTool):
         )
 
 
+class DelegatedTaskWaitTool(RuntimeTool):
+    """Wait for background delegation progress without repeatedly polling status."""
+
+    name = "delegated_task_wait"
+    description = (
+        "Wait for background jobs to make progress with a bounded timeout. Use this "
+        "when no useful foreground work remains and background jobs are still active. "
+        "Returns newly completed job results once, plus lightweight active job status."
+    )
+    approval_level = ApprovalLevel.READ
+    category = "delegation"
+    input_model = DelegatedTaskWaitInput
+    input_schema = DelegatedTaskWaitInput.model_json_schema()
+
+    def __init__(self, supervisor: BackgroundJobSupervisor) -> None:
+        self.supervisor = supervisor  # 等待并交付当前主运行的后台 Job 进展。
+
+    async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
+        requested_ids = set(input_data["job_ids"]) or None
+        timeout = min(
+            input_data["timeout_seconds"],
+            context.config.background_idle_wait_timeout_seconds,
+        )
+        completed = await self.supervisor.wait_for_completion(timeout, requested_ids)
+        events = await self.supervisor.drain_events(requested_ids) if completed else []
+        completed_jobs = [
+            _job_data(
+                await self.supervisor.get(event.job_id),
+                context.config.subagent_max_result_chars,
+            )
+            for event in events
+        ]
+        active_jobs = [
+            _active_job_data(job)
+            for job in await self.supervisor.list(None, observe=False)
+            if job.status not in TERMINAL_JOB_STATUSES
+            and (requested_ids is None or job.job_id in requested_ids)
+        ]
+        summary = (
+            f"wait returned {len(completed_jobs)} completed background job(s); "
+            f"{len(active_jobs)} active"
+        )
+        if not completed:
+            summary = (
+                f"wait timed out after {timeout:g}s; {len(active_jobs)} background "
+                "job(s) still active"
+            )
+        return ToolResult(
+            success=True,
+            summary=summary,
+            data={
+                "timeout": not completed,
+                "completed_jobs": completed_jobs,
+                "active_jobs": active_jobs,
+            },
+        )
+
+
 class DelegatedTaskCancelTool(RuntimeTool):
     """Request cancellation of one queued or running background delegation."""
 
@@ -228,3 +297,17 @@ class DelegatedTaskCancelTool(RuntimeTool):
 
 def _job_data(job: BackgroundJob, max_result_chars: int) -> dict:
     return public_job_data(job, max_result_chars)
+
+
+def _active_job_data(job: BackgroundJob) -> dict:
+    return {
+        "schema_version": job.schema_version,
+        "job_id": job.job_id,
+        "subagent_id": job.subagent_id,
+        "task_id": job.task_id,
+        "status": job.status.value,
+        "created_at": job.created_at.isoformat(),
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "task_managed_by_job": job.task_id is not None,
+    }
