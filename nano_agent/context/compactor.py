@@ -19,6 +19,7 @@ from nano_agent.services.llm import LLMClient
 from nano_agent.tools.base import ToolSpec
 
 MICRO_COMPACT_MESSAGE = "[Earlier tool result compacted. Re-run if needed.]"
+PREDICTIVE_PRECOMPACT_BUFFER_TOKENS = 35_000
 
 
 class CompactionRecord(BaseModel):
@@ -233,6 +234,7 @@ class ContextCompactor:
         self.auto_compact_attempts = 0  # 已执行的自动摘要压缩次数。
         self.reactive_compact_attempts = 0  # 已执行的应急压缩次数。
         self.summary_llm_call_count = 0  # 自动摘要额外发起的 LLM 调用次数。
+        self.exposed_tool_call_ids: set[str] = set()  # 已成功发送给 LLM 的工具结果 id。
 
     async def prepare(
         self,
@@ -241,9 +243,16 @@ class ContextCompactor:
     ) -> list[AgentMessage]:
         if not self.config.context_compaction_enabled:
             return messages
-        prepared = await asyncio.to_thread(self.tool_result_budget, messages)
+        if not self.should_precompact(messages, tools):
+            await self.store.save_checkpoint_async(messages)
+            return messages
+        prepared = await asyncio.to_thread(
+            self.tool_result_budget,
+            messages,
+            True,
+        )
         prepared = self.snip_compact(prepared, tools)
-        prepared = self.micro_compact(prepared)
+        prepared = self.micro_compact(prepared, exposed_only=True)
         while (
             self.should_auto_compact(prepared, tools)
             and self.auto_compact_attempts < self.config.max_auto_compactions
@@ -258,9 +267,26 @@ class ContextCompactor:
         await self.store.save_checkpoint_async(prepared)
         return prepared
 
-    def tool_result_budget(self, messages: list[AgentMessage]) -> list[AgentMessage]:
+    def mark_exposed(self, messages: list[AgentMessage]) -> None:
+        """Record tool results that were included in a successful LLM request."""
+
+        for message in messages:
+            if message.role == "tool" and message.tool_call_id:
+                self.exposed_tool_call_ids.add(message.tool_call_id)
+
+    def tool_result_budget(
+        self,
+        messages: list[AgentMessage],
+        exposed_only: bool = False,
+    ) -> list[AgentMessage]:
+        """Persist oversized latest tool results, optionally only after first exposure."""
+
         copied = self._copy_messages(messages)
-        latest = self._latest_tool_batch(copied)
+        latest = [
+            message
+            for message in self._latest_tool_batch(copied)
+            if not exposed_only or self._is_exposed_tool_result(message)
+        ]
         total = sum(len(message.content) for message in latest)
         if total <= self.config.tool_result_budget_chars:
             return copied
@@ -326,9 +352,20 @@ class ContextCompactor:
         )
         return [*copied[:head_end], placeholder, *copied[tail_start:]]
 
-    def micro_compact(self, messages: list[AgentMessage]) -> list[AgentMessage]:
+    def micro_compact(
+        self,
+        messages: list[AgentMessage],
+        exposed_only: bool = False,
+    ) -> list[AgentMessage]:
+        """Replace old large tool results, optionally only after first exposure."""
+
         copied = self._copy_messages(messages)
-        tool_results = [message for message in copied if message.role == "tool"]
+        tool_results = [
+            message
+            for message in copied
+            if message.role == "tool"
+            and (not exposed_only or self._is_exposed_tool_result(message))
+        ]
         keep = self.config.micro_keep_recent_tool_results
         compactable = tool_results[:-keep] if keep else tool_results
         for message in compactable:
@@ -337,26 +374,43 @@ class ContextCompactor:
             message.content = self._micro_tool_result(message)
         return copied
 
+    def should_precompact(
+        self,
+        messages: list[AgentMessage],
+        tools: list[ToolSpec],
+    ) -> bool:
+        """Return whether cheap compaction should start before auto-summary pressure."""
+
+        return self.estimator.estimate(messages, tools) >= self._precompact_threshold_tokens()
+
     def should_auto_compact(
         self,
         messages: list[AgentMessage],
         tools: list[ToolSpec],
     ) -> bool:
-        usable = max(
-            1,
-            self.config.context_max_input_tokens
-            - self.config.context_output_reserve_tokens,
+        return self.estimator.estimate(messages, tools) >= self._auto_compact_threshold_tokens()
+
+    def _precompact_threshold_tokens(self) -> int:
+        auto_threshold = self._auto_compact_threshold_tokens()
+        usable = self._usable_context_tokens()
+        predictive_buffer = min(
+            PREDICTIVE_PRECOMPACT_BUFFER_TOKENS,
+            max(1, usable // 5),
         )
-        threshold = int(usable * self.config.context_auto_compact_ratio)
-        return self.estimator.estimate(messages, tools) >= threshold
+        return max(1, auto_threshold - predictive_buffer)
+
+    def _auto_compact_threshold_tokens(self) -> int:
+        return max(1, int(self._usable_context_tokens() * self.config.context_auto_compact_ratio))
 
     def _snip_threshold_tokens(self) -> int:
-        usable = max(
+        return max(1, int(self._usable_context_tokens() * self.config.snip_compact_ratio))
+
+    def _usable_context_tokens(self) -> int:
+        return max(
             1,
             self.config.context_max_input_tokens
             - self.config.context_output_reserve_tokens,
         )
-        return max(1, int(usable * self.config.snip_compact_ratio))
 
     async def compact_history(
         self,
@@ -584,6 +638,11 @@ class ContextCompactor:
             if message.role == "assistant":
                 break
         return tail_start
+
+    def _is_exposed_tool_result(self, message: AgentMessage) -> bool:
+        """Return whether a tool result has already reached a successful LLM request."""
+
+        return bool(message.tool_call_id and message.tool_call_id in self.exposed_tool_call_ids)
 
     def _persisted_tool_result(
         self,

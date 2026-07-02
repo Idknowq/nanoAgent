@@ -849,6 +849,8 @@ class AgentLoop:
             raise normalized from exc
 
         self.context.current_llm_duration_seconds = time.monotonic() - started
+        if self.compactor is not None:
+            self.compactor.mark_exposed(messages)
         try:
             await self.hook_pipeline.after_llm_call(deferred, self.context, response)
         except Exception as exc:

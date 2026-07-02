@@ -344,6 +344,86 @@ async def test_micro_compact_only_replaces_old_large_tool_results(tmp_path: Path
     assert tool_messages[1].content == recent
 
 
+async def test_prepare_leaves_low_risk_context_unchanged(tmp_path: Path) -> None:
+    config = AgentConfig(
+        context_max_input_tokens=10_000,
+        context_output_reserve_tokens=0,
+        tool_result_budget_chars=100,
+        tool_result_preview_chars=16,
+    )
+    compactor, llm, store = build_compactor(tmp_path, config)
+    large = json.dumps(
+        {"success": True, "summary": "read", "data": {"content": "x" * 1_000}}
+    )
+    messages = [
+        AgentMessage(role="user", content="inspect"),
+        *tool_exchange("large", large),
+    ]
+    store.append_many(messages)
+
+    prepared = await compactor.prepare(messages, [])
+
+    assert prepared == messages
+    assert llm.calls == 0
+    assert (store.path.parent / "context_checkpoint.json").exists()
+
+
+async def test_prepare_does_not_compact_unexposed_large_tool_result(
+    tmp_path: Path,
+) -> None:
+    config = AgentConfig(
+        context_max_input_tokens=2_000,
+        context_output_reserve_tokens=0,
+        context_auto_compact_ratio=0.8,
+        tool_result_budget_chars=300,
+        tool_result_preview_chars=16,
+        max_auto_compactions=0,
+    )
+    compactor, _, store = build_compactor(tmp_path, config)
+    large = json.dumps(
+        {"success": True, "summary": "read", "data": {"content": "x" * 3_500}}
+    )
+    messages = [
+        AgentMessage(role="user", content="inspect"),
+        *tool_exchange("large", large),
+    ]
+    store.append_many(messages)
+
+    prepared = await compactor.prepare(messages, [])
+
+    tool_message = next(message for message in prepared if message.role == "tool")
+    assert tool_message.content == large
+
+
+async def test_prepare_compacts_exposed_large_tool_result(tmp_path: Path) -> None:
+    config = AgentConfig(
+        context_max_input_tokens=2_000,
+        context_output_reserve_tokens=0,
+        context_auto_compact_ratio=0.8,
+        tool_result_budget_chars=300,
+        tool_result_preview_chars=16,
+        max_auto_compactions=0,
+    )
+    compactor, _, store = build_compactor(tmp_path, config)
+    mark_workspace_cloned(compactor.workspace_path)
+    large = json.dumps(
+        {"success": True, "summary": "read", "data": {"content": "x" * 3_500}}
+    )
+    messages = [
+        AgentMessage(role="user", content="inspect"),
+        *tool_exchange("large", large),
+    ]
+    store.append_many(messages)
+    compactor.mark_exposed(messages)
+
+    prepared = await compactor.prepare(messages, [])
+
+    tool_message = next(message for message in prepared if message.role == "tool")
+    replacement = json.loads(tool_message.content)
+    assert replacement["data"]["persisted_output"]["characters"] == len(large)
+    assert replacement["data"]["persisted_output"]["preview"] == large[:16]
+
+
 async def test_prepare_compacts_history_and_persists_transcript(tmp_path: Path) -> None:
     config = AgentConfig(
         context_max_input_tokens=1_000,

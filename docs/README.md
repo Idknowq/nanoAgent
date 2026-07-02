@@ -8,4 +8,10 @@ This directory keeps the public project documentation small and task-oriented.
 - [Security Model](security.md): understand write, command, workspace, and token boundaries.
 - [Development Guide](development.md): run tests, lint, and extend tools or MCP providers.
 
-Internal notes and interview material should stay outside the main documentation path unless they are rewritten for users.
+## Internal Development Notes
+
+- [Background Subagent Runtime Follow-ups](todo/background-subagent-runtime.md): pending
+  work from the Django stress run, including task query semantics, wait behavior,
+  finalization issues, and cache-impacting result delivery.
+
+Interview material should stay outside the main documentation path unless it is rewritten for users.

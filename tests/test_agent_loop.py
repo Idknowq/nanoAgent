@@ -338,6 +338,18 @@ class PromptTooLongThenFinishLLM:
         return LLMResponse(content="recovered", stop_reason="end_turn")
 
 
+class EndTurnLLM:
+    """测试用 LLM，收到请求后直接结束。"""
+
+    def __init__(self) -> None:
+        self.calls = 0  # 记录 LLM 调用次数。
+
+    async def complete(self, messages, tools):  # type: ignore[no-untyped-def]
+        del messages, tools
+        self.calls += 1
+        return LLMResponse(content="done", stop_reason="end_turn")
+
+
 class TransientThenFinishLLM:
     def __init__(self, failures: int, error: LLMServiceError) -> None:
         self.calls = 0
@@ -668,6 +680,50 @@ async def test_agent_loop_retries_once_after_reactive_compaction(tmp_path: Path)
     assert llm.request_sizes[1] < llm.request_sizes[0]
     assert context.current_llm_call_id == "llm-1-reactive-1"
     assert compactor.reactive_compact_attempts == 1
+
+
+async def test_agent_loop_marks_tool_results_exposed_after_successful_llm_call(
+    tmp_path: Path,
+) -> None:
+    config = AgentConfig()
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
+        config=config,
+    )
+    llm = EndTurnLLM()
+    store = MessageStore(context.run_dir)
+    compactor = ContextCompactor(
+        config=config,
+        llm=llm,  # type: ignore[arg-type]
+        store=CompactionStore("test", context.run_dir, store),
+        repo_url=context.repo_url,
+        workspace_path=context.workspace_path,
+    )
+    loop = AgentLoop(
+        config=config,
+        llm=llm,  # type: ignore[arg-type]
+        tools=ToolRegistry([]),
+        context=context,
+        message_store=store,
+        compactor=compactor,
+    )
+    initial = [
+        AgentMessage(role="user", content="start"),
+        AgentMessage(
+            role="assistant",
+            content="read",
+            tool_uses=[ToolUseRequest(id="tool-1", name="read_file", input={"path": "a.py"})],
+        ),
+        AgentMessage(role="tool", content="content", tool_call_id="tool-1"),
+    ]
+
+    result = await loop.run(RunSummary(run_id="test", repo_url=context.repo_url), initial)
+
+    assert result.status == "completed"
+    assert "tool-1" in compactor.exposed_tool_call_ids
 
 
 async def test_agent_loop_retries_transient_errors_with_exponential_backoff(tmp_path: Path) -> None:
