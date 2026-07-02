@@ -262,7 +262,9 @@ async def test_subagent_has_isolated_messages_tools_and_counters(tmp_path: Path)
     result = await manager.run(request)
 
     assert result.status == SubagentStatus.SUCCEEDED
-    assert result.output == "Found the requested implementation detail."
+    assert result.output is None
+    assert result.completion_report is not None
+    assert result.completion_report.resolution == "Found the requested implementation detail."
     assert result.steps_used == 1
     assert result.llm_calls_used == 1
     assert llm.tool_names == [{"read_file", "finish_run"}]

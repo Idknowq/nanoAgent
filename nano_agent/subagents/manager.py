@@ -316,15 +316,23 @@ class SubagentManager:
     ) -> SubagentResult:
         report = run.completion_report
         if run.status == RunStatus.COMPLETED and report is not None:
-            output = self._bounded_output(report.resolution)
             return SubagentResult(
                 subagent_id=subagent_id,
                 parent_run_id=self.parent_context.run_id,
                 status=SubagentStatus.SUCCEEDED,
-                output=output,
                 steps_used=run.steps,
                 llm_calls_used=run.llm_call_count,
                 completion_report=report,
+                run_dir=str(run_dir),
+            )
+        if run.status == RunStatus.COMPLETED:
+            return SubagentResult(
+                subagent_id=subagent_id,
+                parent_run_id=self.parent_context.run_id,
+                status=SubagentStatus.SUCCEEDED,
+                output=self._bounded_output(run.final_message or "Subagent completed."),
+                steps_used=run.steps,
+                llm_calls_used=run.llm_call_count,
                 run_dir=str(run_dir),
             )
         if run.status == RunStatus.BLOCKED:

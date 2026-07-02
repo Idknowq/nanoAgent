@@ -305,7 +305,11 @@ class BackgroundJobSupervisor:
             await self.task_service.update(
                 job.task_id,
                 status=TaskStatus.COMPLETED,
-                result=result.output or "Subagent completed successfully.",
+                result=(
+                    result.completion_report.resolution
+                    if result.completion_report is not None
+                    else result.output or "Subagent completed successfully."
+                ),
                 error="",
             )
         elif result.status == SubagentStatus.BLOCKED:

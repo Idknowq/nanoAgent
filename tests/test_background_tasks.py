@@ -91,7 +91,7 @@ class ControlledSubagentManager:
                 subagent_id=prepared.state.subagent_id,
                 parent_run_id="parent",
                 status=SubagentStatus.SUCCEEDED,
-                output=f"completed {prepared.request.task}",
+                output=f"fallback {prepared.request.task}",
                 completion_report=CompletionReport(
                     status=RunStatus.COMPLETED,
                     problem=prepared.request.task,
@@ -599,3 +599,44 @@ async def test_public_subagent_result_enforces_configured_character_budget() -> 
 
     assert len(json.dumps(payload, ensure_ascii=False)) <= 1_000
     assert payload["completion_report"]["remaining_risks"]
+    assert payload["full_result"]["artifact_path"] == "subagents/subagent-1/result.json"
+    assert "output" not in payload
+
+
+async def test_public_subagent_result_omits_output_when_report_exists() -> None:
+    report_text = "same report"
+    result = SubagentResult(
+        subagent_id="subagent-1",
+        parent_run_id="parent",
+        status=SubagentStatus.SUCCEEDED,
+        output=report_text,
+        run_dir="/tmp/subagent-1",
+        completion_report=CompletionReport(
+            status=RunStatus.COMPLETED,
+            problem="problem",
+            root_cause="cause",
+            resolution=report_text,
+            verification_summary="verified",
+        ),
+    )
+
+    payload = public_subagent_result(result, 10_000)
+
+    assert payload["completion_report"]["resolution"] == report_text
+    assert "output" not in payload
+    assert json.dumps(payload, ensure_ascii=False).count(report_text) == 1
+
+
+async def test_public_subagent_result_keeps_output_without_report() -> None:
+    result = SubagentResult(
+        subagent_id="subagent-1",
+        parent_run_id="parent",
+        status=SubagentStatus.SUCCEEDED,
+        output="fallback output",
+        run_dir="/tmp/subagent-1",
+    )
+
+    payload = public_subagent_result(result, 10_000)
+
+    assert payload["completion_report"] is None
+    assert payload["output"] == "fallback output"
