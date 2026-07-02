@@ -37,15 +37,13 @@ Repeated `delegated_task_list` polling should not be the normal waiting mechanis
 
 ### `delegated_task_list`
 
-Default behavior should be lightweight:
+Default behavior is lightweight:
 
 - Return `job_id`, `task_id`, `subagent_id`, `status`, timestamps, and elapsed time.
 - Do not return full terminal results by default.
 - Do not consume completion events by default.
-- Optionally allow a bounded `include_results=true` mode only when explicitly needed.
-
-Current issue: list returns complete terminal job results. In the source run, repeated list
-calls reintroduced large subagent reports into the main context.
+- Allow a bounded `include_results=true` mode only when explicitly needed.
+- `include_results=true` marks returned terminal results as delivered.
 
 ### `delegated_task_get`
 
@@ -65,7 +63,7 @@ If the job is terminal:
 
 - If the result has not been delivered, return a bounded result and mark it observed.
 - If the result was already delivered, return an `already_delivered` summary by default.
-- Full result re-fetch should require an explicit option such as `include_result=true`.
+- Full result re-fetch requires `include_result=true`.
 
 ### `delegated_task_wait`
 
@@ -201,10 +199,9 @@ Current behavior is protocol-valid, but expensive.
 Potential fixes:
 
 - Compact or truncate the previous assistant content before continuation.
-- For non-tool-call max-token continuations near final report generation, encourage or require
+- For max-token continuations near final report generation, encourage concise completion or
   `finish_run`.
-- Prevent continuation from launching unrelated new investigation unless the previous response
-  was truncated during a tool call.
+- Prevent continuation from launching unrelated new investigation.
 
 ### 6. Background allowed-tools error message is misleading
 
@@ -235,11 +232,11 @@ Completed:
 - Fixed the background allowed-tools error message.
 - Made finalization correction LLM call ids unique.
 - Added `delegated_task_wait` with bounded timeout.
+- Made `delegated_task_list` status-only by default.
+- Refined delivered-result semantics across hook injection, wait, list, and get.
+- Tightened continuation prompts while keeping one unified `max_tokens` recovery limit.
 
 Remaining:
 
-1. Make `delegated_task_list` status-only by default.
-2. Refine observed/delivered semantics across hook injection, wait, list, and get.
-3. Tighten continuation behavior for non-tool-call `max_tokens`.
-4. Re-run the Django stress scenario and compare cache hit rate, message growth, and repeated
+1. Re-run the Django stress scenario and compare cache hit rate, message growth, and repeated
    background result delivery.

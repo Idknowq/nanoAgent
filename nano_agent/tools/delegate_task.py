@@ -30,10 +30,12 @@ class DelegateTaskInput(ToolInput):
 
 class DelegatedTaskGetInput(ToolInput):
     job_id: str = Field(pattern=r"^job-\d+$")  # 需要查询的后台 Job 标识。
+    include_result: bool = False  # 是否强制返回已交付过的终态结果。
 
 
 class DelegatedTaskListInput(ToolInput):
     status: BackgroundJobStatus | None = None  # 可选的 Job 状态过滤条件。
+    include_results: bool = False  # 是否同时交付终态 Job 结果。
 
 
 class DelegatedTaskWaitInput(ToolInput):
@@ -147,7 +149,10 @@ class DelegatedTaskGetTool(RuntimeTool):
     """Get the latest state and bounded result for one background delegation."""
 
     name = "delegated_task_get"
-    description = "Get the latest state and result for one background job_id."
+    description = (
+        "Get one background job. Active jobs return status only. Terminal jobs return "
+        "their result once by default; set include_result=true to re-fetch a delivered result."
+    )
     approval_level = ApprovalLevel.READ
     category = "delegation"
     input_model = DelegatedTaskGetInput
@@ -157,16 +162,30 @@ class DelegatedTaskGetTool(RuntimeTool):
         self.supervisor = supervisor  # 查询当前主运行的后台 Job。
 
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
-        job = await self.supervisor.get(input_data["job_id"], observe=True)
+        job_id = input_data["job_id"]
+        include_result = input_data["include_result"]
+        job = await self.supervisor.get(job_id)
+        delivered = (
+            await self.supervisor.is_observed(job_id)
+            if job.status in TERMINAL_JOB_STATUSES
+            else False
+        )
+        should_include_result = (
+            job.status in TERMINAL_JOB_STATUSES and (include_result or not delivered)
+        )
+        if should_include_result:
+            job = await self.supervisor.get(job_id, observe=True)
+        payload = (
+            _job_data(job, context.config.subagent_max_result_chars)
+            if should_include_result
+            else _job_status_data(job)
+        )
+        if job.status in TERMINAL_JOB_STATUSES:
+            payload["already_delivered"] = delivered and not include_result
         return ToolResult(
             success=True,
             summary=f"{job.job_id} is {job.status.value}",
-            data={
-                "background_job": _job_data(
-                    job,
-                    context.config.subagent_max_result_chars,
-                )
-            },
+            data={"background_job": payload},
         )
 
 
@@ -174,7 +193,10 @@ class DelegatedTaskListTool(RuntimeTool):
     """List background delegations created during the current run."""
 
     name = "delegated_task_list"
-    description = "List background jobs, optionally filtered by lifecycle status."
+    description = (
+        "List background jobs as lightweight status records by default. Set "
+        "include_results=true only when terminal job results are explicitly needed."
+    )
     approval_level = ApprovalLevel.READ
     category = "delegation"
     input_model = DelegatedTaskListInput
@@ -184,7 +206,11 @@ class DelegatedTaskListTool(RuntimeTool):
         self.supervisor = supervisor  # 枚举当前主运行的后台 Job。
 
     async def run(self, input_data: dict, context: ToolContext) -> ToolResult:
-        jobs = await self.supervisor.list(input_data["status"], observe=True)
+        include_results = input_data["include_results"]
+        jobs = await self.supervisor.list(
+            input_data["status"],
+            observe=include_results,
+        )
         status_counts = Counter(job.status for job in jobs)
         status_summary = ", ".join(
             f"{status_counts[status]} {status.value}"
@@ -199,7 +225,11 @@ class DelegatedTaskListTool(RuntimeTool):
             summary=summary,
             data={
                 "background_jobs": [
-                    _job_data(job, context.config.subagent_max_result_chars)
+                    (
+                        _job_data(job, context.config.subagent_max_result_chars)
+                        if include_results
+                        else _job_status_data(job)
+                    )
                     for job in jobs
                 ]
             },
@@ -300,6 +330,10 @@ def _job_data(job: BackgroundJob, max_result_chars: int) -> dict:
 
 
 def _active_job_data(job: BackgroundJob) -> dict:
+    return _job_status_data(job)
+
+
+def _job_status_data(job: BackgroundJob) -> dict:
     return {
         "schema_version": job.schema_version,
         "job_id": job.job_id,

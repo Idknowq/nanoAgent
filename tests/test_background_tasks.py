@@ -383,6 +383,93 @@ async def test_querying_terminal_job_suppresses_duplicate_completion_notice(
     await supervisor.shutdown()
 
 
+async def test_getting_delivered_terminal_job_is_status_only_by_default(
+    tmp_path: Path,
+) -> None:
+    manager = ControlledSubagentManager()
+    manager.release.set()
+    supervisor = make_supervisor(tmp_path, manager)
+    context = ToolContext(
+        run_id="run",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "run",
+        config=AgentConfig(),
+    )
+    job = await supervisor.submit(make_request("inspect"))
+    await wait_terminal(supervisor, job.job_id)
+
+    first = await DelegatedTaskGetTool(supervisor).invoke({"job_id": job.job_id}, context)
+    second = await DelegatedTaskGetTool(supervisor).invoke({"job_id": job.job_id}, context)
+    refetched = await DelegatedTaskGetTool(supervisor).invoke(
+        {"job_id": job.job_id, "include_result": True},
+        context,
+    )
+
+    assert "result" in first.data["background_job"]
+    assert "result" not in second.data["background_job"]
+    assert second.data["background_job"]["already_delivered"] is True
+    assert "result" in refetched.data["background_job"]
+    await supervisor.shutdown()
+
+
+async def test_listing_terminal_jobs_does_not_suppress_completion_notice(
+    tmp_path: Path,
+) -> None:
+    manager = ControlledSubagentManager()
+    manager.release.set()
+    supervisor = make_supervisor(tmp_path, manager)
+    context = ToolContext(
+        run_id="run",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "run",
+        config=AgentConfig(),
+    )
+    job = await supervisor.submit(make_request("inspect"))
+    await wait_terminal(supervisor, job.job_id)
+
+    listed = await DelegatedTaskListTool(supervisor).invoke({}, context)
+    injected = await BackgroundCompletionHook(supervisor).before_llm_call(None, [], [])  # type: ignore[arg-type]
+
+    assert listed.success
+    assert [item["job_id"] for item in listed.data["background_jobs"]] == [job.job_id]
+    assert "result" not in listed.data["background_jobs"][0]
+    assert injected is not None
+    assert job.job_id in injected.injected_messages[0].content
+    await supervisor.shutdown()
+
+
+async def test_listing_with_results_suppresses_duplicate_completion_notice(
+    tmp_path: Path,
+) -> None:
+    manager = ControlledSubagentManager()
+    manager.release.set()
+    supervisor = make_supervisor(tmp_path, manager)
+    context = ToolContext(
+        run_id="run",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "run",
+        config=AgentConfig(),
+    )
+    job = await supervisor.submit(make_request("inspect"))
+    await wait_terminal(supervisor, job.job_id)
+
+    listed = await DelegatedTaskListTool(supervisor).invoke(
+        {"include_results": True},
+        context,
+    )
+    injected = await BackgroundCompletionHook(supervisor).before_llm_call(None, [], [])  # type: ignore[arg-type]
+
+    assert listed.success
+    assert listed.data["background_jobs"][0]["result"]["completion_report"][
+        "verification_summary"
+    ] == "Reviewed relevant files."
+    assert injected is None
+    await supervisor.shutdown()
+
+
 async def test_finish_run_rejects_active_background_jobs(tmp_path: Path) -> None:
     context = ToolContext(
         run_id="run",
@@ -462,7 +549,7 @@ async def test_delegated_task_list_summary_counts_jobs_by_status(tmp_path: Path)
             observe: bool,
         ) -> list[BackgroundJob]:
             assert status is None
-            assert observe
+            assert observe is False
             return [
                 BackgroundJob(
                     job_id="job-1",

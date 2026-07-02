@@ -945,8 +945,9 @@ class AgentLoop:
             )
         return (
             "The previous response was truncated by the output token limit. Continue from "
-            "where it stopped without repeating completed content. Complete the current "
-            "action or submit finish_run."
+            "where it stopped without repeating completed content. Do not start new "
+            "investigation, do not call tools, and keep the answer concise. If this is "
+            "a final answer, complete it directly; otherwise submit finish_run."
         )
 
     def _validate_completion(

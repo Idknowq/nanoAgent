@@ -48,7 +48,7 @@ class BackgroundJobSupervisor:
         self._prepared: dict[str, PreparedSubagent] = {}  # Job 对应的已持久化子运行输入。
         self._tokens: dict[str, CancellationToken] = {}  # Job 对应的合作式取消信号。
         self._events: deque[BackgroundCompletionEvent] = deque()  # 尚未投递的终态通知。
-        self._observed: set[str] = set()  # 已通过查询或通知交付给父 Agent 的终态 Job。
+        self._observed: set[str] = set()  # 终态结果已交付给父 Agent 的 Job。
         self._lock = asyncio.Lock()  # 串行化内存状态转换和任务提交。
         self._completion = asyncio.Condition(self._lock)  # 等待任一 Job 进入终态。
         self._closed = False  # Supervisor 是否已经停止接收新 Job。
@@ -101,6 +101,12 @@ class BackgroundJobSupervisor:
                     self._observed.add(job_id)
                 return job.model_copy(deep=True)
         return await self.store.get(job_id)
+
+    async def is_observed(self, job_id: str) -> bool:
+        """Return whether a terminal job result was already delivered."""
+
+        async with self._lock:
+            return job_id in self._observed
 
     async def list(
         self,

@@ -961,6 +961,32 @@ async def test_agent_loop_regenerates_truncated_tool_call(tmp_path: Path) -> Non
     assert "Regenerate the complete tool call" in llm.requests[1][-1].content
 
 
+async def test_agent_loop_uses_unified_continuation_limit(tmp_path: Path) -> None:
+    config = AgentConfig(llm_max_continuations=0)
+    context = ToolContext(
+        run_id="test",
+        repo_url="https://example.com/repo.git",
+        workspace_path=tmp_path,
+        run_dir=tmp_path / "runs" / "test",
+        config=config,
+    )
+    llm = AlwaysTruncatedLLM()
+    loop = AgentLoop(
+        config=config,
+        llm=llm,  # type: ignore[arg-type]
+        tools=ToolRegistry(),
+        context=context,
+    )
+    run = RunSummary(run_id="test", repo_url=context.repo_url)
+
+    with pytest.raises(LLMServiceError) as captured:
+        await loop.run(run, [AgentMessage(role="user", content="start")])
+
+    assert captured.value.kind == LLMErrorKind.OUTPUT_TRUNCATED
+    assert "0 continuation request(s)" in str(captured.value)
+    assert run.llm_call_count == 1
+
+
 async def test_agent_loop_fails_after_continuation_limit(tmp_path: Path) -> None:
     config = AgentConfig(llm_max_continuations=1)
     context = ToolContext(
